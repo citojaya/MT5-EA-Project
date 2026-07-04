@@ -16,5 +16,6 @@ reports/logs/
 *.pkl
 *.joblib
 *.h5
+config/*.json
 
 .ipynb_checkpoints/

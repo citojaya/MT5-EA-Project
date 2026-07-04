@@ -1,0 +1,8 @@
+time=2026-07-04 13:35:00+00:00
+symbol=BTCUSD
+timeframe=M5
+close=62421.83
+regime=6
+regime_name=Low Volatility
+confidence=0.9999
+updated_utc=2026-07-04 10:36:00.263353+00:00
