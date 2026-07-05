@@ -6,6 +6,20 @@ import pandas as pd
 import json
 
 
+import argparse
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "symbol",
+    type=str,
+    help="Trading symbol"
+)
+
+args = parser.parse_args()
+
+SYMBOL = args.symbol+".a"
+
 # -----------------------------
 # USER SETTINGS
 # -----------------------------
@@ -16,7 +30,7 @@ ACCOUNT  = int(cfg["login"])
 SERVER   = str(cfg["server"])
 PASSWORD = str(cfg["password"])
 
-SYMBOL    = "BTCUSD.a"
+#SYMBOL    = "BTCUSD.a"
 TIMEFRAME = mt5.TIMEFRAME_M5
 
 DATE_FROM = datetime(2026, 1, 1, tzinfo=timezone.utc)
