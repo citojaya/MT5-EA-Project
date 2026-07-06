@@ -10,10 +10,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-    ("src/data/download_history.py", "EURUSD", "M5"),
-     ("src/features/build_features.py","EURUSD", "M5"),
-     ("src/labels/create_regime_labels.py","EURUSD", "M5"),
-     ("src/models/train_stage1_regime.py", "EURUSD", "M5")
+   # ("src/data/download_history.py", "NASUSD", "M1"),
+   # ("src/features/build_features.py","NASUSD", "M1"),
+   # ("src/labels/create_regime_labels.py","NASUSD", "M1"),
+   # ("src/models/train_stage1_regime.py", "NASUSD", "M1", "2026-01-01", "2026-05-30 23:59"),
+    ("src/backtest/backtest.py", "NASUSD", "M1", "2026-06-01", "2026-07-07 23:59"),
     # ("src/live/predict_live_regime.py",),  # Uncomment if needed
     # ("src/labels/create_trade_labels.py",),
     # ("src/models/train_stage2_trade.py",),

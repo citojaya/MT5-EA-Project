@@ -11,9 +11,11 @@
 #include <Trade/Trade.mqh>
 
 //--- Inputs ----------------------------------------------------------
-input string           InpFileName        = "XAUUSD_M1_backtest_signals.csv"; // File name
-input bool             InpUseCommonFolder = false;               // Read from Common Files (MQL5\..\Common\Files)
+input string           InpFileName        = "XAUUSD_M5_backtest_signals.csv"; // File name
+input bool             InpUseCommonFolder = true;               // Read from Common Files (MQL5\..\Common\Files)
+input bool             InpUseTimer        = false;               // Process signals on timer instead of ticks
 input int              InpRefreshSeconds  = 5;                   // Refresh interval (seconds)
+input bool             InpShowPanel       = false;               // Draw chart panel
 input ENUM_BASE_CORNER InpCorner          = CORNER_LEFT_UPPER;   // Panel corner
 input int              InpXOffset         = 15;                  // X offset (px)
 input int              InpYOffset         = 15;                  // Y offset (px)
@@ -50,6 +52,9 @@ string g_signalRegimes[];
 string g_signalRegimeNames[];
 string g_signalConfidence[];
 string g_signalUpdatedUtc[];
+int    g_selectedSignalIndex = -1;
+int    g_atrHandle = INVALID_HANDLE;
+ENUM_TIMEFRAMES g_atrTimeframe = PERIOD_CURRENT;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -58,7 +63,8 @@ int OnInit()
    g_signalsLoaded = LoadSignalCsv(InpFileName, InpUseCommonFolder);
    if(!g_signalsLoaded)
       Print(g_lastErr);
-   EventSetTimer(MathMax(1, InpRefreshSeconds));
+   if(InpUseTimer)
+      EventSetTimer(MathMax(1, InpRefreshSeconds));
    ReadAndDisplay();
    return(INIT_SUCCEEDED);
   }
@@ -66,7 +72,10 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   EventKillTimer();
+   if(InpUseTimer)
+      EventKillTimer();
+   if(g_atrHandle != INVALID_HANDLE)
+      IndicatorRelease(g_atrHandle);
    ObjectsDeleteAll(0, PREFIX);
    ChartRedraw();
   }
@@ -74,6 +83,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   if(!InpUseTimer)
+      ReadAndDisplay();
+
    ManageBreakEven();
   }
 
@@ -89,9 +101,12 @@ void OnTimer()
 void ReadAndDisplay()
   {
    g_fileOk = SelectSignalForTesterTime();
-   DrawPanel();
    ProcessTradingSignal();
-   ChartRedraw();
+   if(InpShowPanel)
+     {
+      DrawPanel();
+      ChartRedraw();
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -153,15 +168,15 @@ void AppendSignalRow(string &fields[])
       return;
 
    int rowIndex = ArraySize(g_signalTimes);
-   ArrayResize(g_signalTimes, rowIndex + 1);
-   ArrayResize(g_signalTimeText, rowIndex + 1);
-   ArrayResize(g_signalSymbols, rowIndex + 1);
-   ArrayResize(g_signalTimeframes, rowIndex + 1);
-   ArrayResize(g_signalClose, rowIndex + 1);
-   ArrayResize(g_signalRegimes, rowIndex + 1);
-   ArrayResize(g_signalRegimeNames, rowIndex + 1);
-   ArrayResize(g_signalConfidence, rowIndex + 1);
-   ArrayResize(g_signalUpdatedUtc, rowIndex + 1);
+   ArrayResize(g_signalTimes, rowIndex + 1, 10000);
+   ArrayResize(g_signalTimeText, rowIndex + 1, 10000);
+   ArrayResize(g_signalSymbols, rowIndex + 1, 10000);
+   ArrayResize(g_signalTimeframes, rowIndex + 1, 10000);
+   ArrayResize(g_signalClose, rowIndex + 1, 10000);
+   ArrayResize(g_signalRegimes, rowIndex + 1, 10000);
+   ArrayResize(g_signalRegimeNames, rowIndex + 1, 10000);
+   ArrayResize(g_signalConfidence, rowIndex + 1, 10000);
+   ArrayResize(g_signalUpdatedUtc, rowIndex + 1, 10000);
 
    g_signalTimes[rowIndex] = signalTime;
    g_signalTimeText[rowIndex] = fields[0];
@@ -237,6 +252,7 @@ bool LoadSignalCsv(string filename, bool commonFolder)
      }
 
    g_lastErr = "";
+   g_selectedSignalIndex = -1;
    return true;
   }
 
@@ -245,6 +261,32 @@ bool LoadSignalCsv(string filename, bool commonFolder)
 //+------------------------------------------------------------------+
 bool SelectSignalForTesterTime()
   {
+   if(!g_signalsLoaded)
+      return false;
+
+   datetime testerTime = TimeCurrent();
+   int signalCount = ArraySize(g_signalTimes);
+   int previousIndex = g_selectedSignalIndex;
+
+   if(g_selectedSignalIndex >= 0 && g_signalTimes[g_selectedSignalIndex] > testerTime)
+      g_selectedSignalIndex = -1;
+
+   int nextIndex = g_selectedSignalIndex + 1;
+   while(nextIndex < signalCount && g_signalTimes[nextIndex] <= testerTime)
+     {
+      g_selectedSignalIndex = nextIndex;
+      nextIndex++;
+     }
+
+   if(g_selectedSignalIndex < 0)
+     {
+      g_lastErr = "No signal row found at/before tester time: " + TimeToString(testerTime, TIME_DATE | TIME_MINUTES);
+      return false;
+     }
+
+   if(g_selectedSignalIndex == previousIndex && g_count > 0)
+      return true;
+
    g_count = 0;
    for(int kvIndex = 0; kvIndex < MAX_KV; kvIndex++)
      {
@@ -252,37 +294,14 @@ bool SelectSignalForTesterTime()
       g_vals[kvIndex] = "";
      }
 
-   if(!g_signalsLoaded)
-      return false;
-
-   datetime testerTime = TimeCurrent();
-   int selectedIndex = -1;
-   datetime selectedTime = 0;
-
-   for(int rowIndex = 0; rowIndex < ArraySize(g_signalTimes); rowIndex++)
-     {
-      datetime signalTime = g_signalTimes[rowIndex];
-      if(signalTime <= testerTime && signalTime >= selectedTime)
-        {
-         selectedIndex = rowIndex;
-         selectedTime = signalTime;
-        }
-     }
-
-   if(selectedIndex < 0)
-     {
-      g_lastErr = "No signal row found at/before tester time: " + TimeToString(testerTime, TIME_DATE | TIME_MINUTES);
-      return false;
-     }
-
-   SetKeyValue("time",        g_signalTimeText[selectedIndex]);
-   SetKeyValue("symbol",      g_signalSymbols[selectedIndex]);
-   SetKeyValue("timeframe",   g_signalTimeframes[selectedIndex]);
-   SetKeyValue("close",       g_signalClose[selectedIndex]);
-   SetKeyValue("regime",      g_signalRegimes[selectedIndex]);
-   SetKeyValue("regime_name", g_signalRegimeNames[selectedIndex]);
-   SetKeyValue("confidence",  g_signalConfidence[selectedIndex]);
-   SetKeyValue("updated_utc", g_signalUpdatedUtc[selectedIndex]);
+   SetKeyValue("time",        g_signalTimeText[g_selectedSignalIndex]);
+   SetKeyValue("symbol",      g_signalSymbols[g_selectedSignalIndex]);
+   SetKeyValue("timeframe",   g_signalTimeframes[g_selectedSignalIndex]);
+   SetKeyValue("close",       g_signalClose[g_selectedSignalIndex]);
+   SetKeyValue("regime",      g_signalRegimes[g_selectedSignalIndex]);
+   SetKeyValue("regime_name", g_signalRegimeNames[g_selectedSignalIndex]);
+   SetKeyValue("confidence",  g_signalConfidence[g_selectedSignalIndex]);
+   SetKeyValue("updated_utc", g_signalUpdatedUtc[g_selectedSignalIndex]);
 
    g_lastErr = "";
    return true;
@@ -363,24 +382,30 @@ ENUM_TIMEFRAMES TimeframeFromString(string timeframeName)
 //+------------------------------------------------------------------+
 double GetAtrValue(ENUM_TIMEFRAMES timeframe)
   {
-   int handle = iATR(_Symbol, timeframe, InpAtrPeriod);
-   if(handle == INVALID_HANDLE)
+   if(g_atrHandle == INVALID_HANDLE || g_atrTimeframe != timeframe)
      {
-      Print("Failed to create ATR handle. Error: ", GetLastError());
-      return 0.0;
+      if(g_atrHandle != INVALID_HANDLE)
+         IndicatorRelease(g_atrHandle);
+
+      g_atrHandle = iATR(_Symbol, timeframe, InpAtrPeriod);
+      g_atrTimeframe = timeframe;
+
+      if(g_atrHandle == INVALID_HANDLE)
+        {
+         Print("Failed to create ATR handle. Error: ", GetLastError());
+         return 0.0;
+        }
      }
 
    double atrBuffer[];
    ArraySetAsSeries(atrBuffer, true);
 
-   if(CopyBuffer(handle, 0, 0, 1, atrBuffer) != 1)
+   if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) != 1)
      {
       Print("Failed to read ATR buffer. Error: ", GetLastError());
-      IndicatorRelease(handle);
       return 0.0;
      }
 
-   IndicatorRelease(handle);
    return atrBuffer[0];
   }
 
