@@ -1,9 +1,6 @@
+import argparse
+
 import pandas as pd
-import numpy as np
-
-
-INPUT_FILE = "data/features/BTCUSD_M5_features.csv"
-OUTPUT_FILE = "data/labels/BTCUSD_M5_regime_labels.csv"
 
 
 REGIME_MAP = {
@@ -89,14 +86,28 @@ def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
+    return parser.parse_args()
+
+
 def main():
-    df = pd.read_csv(INPUT_FILE)
+    args = parse_args()
+    symbol = args.symbol
+    timeframe = args.timeframe.upper()
+
+    input_file = f"data/features/{symbol}_{timeframe}_features.csv"
+    output_file = f"data/labels/{symbol}_{timeframe}_regime_labels.csv"
+
+    df = pd.read_csv(input_file)
 
     labelled = create_regime_labels(df)
 
-    labelled.to_csv(OUTPUT_FILE, index=False)
+    labelled.to_csv(output_file, index=False)
 
-    print(f"Saved regime labels to: {OUTPUT_FILE}")
+    print(f"Saved regime labels to: {output_file}")
     print()
     print(labelled["regime_name"].value_counts())
     print()

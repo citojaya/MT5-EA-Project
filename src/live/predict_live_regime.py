@@ -1,3 +1,4 @@
+import argparse
 import json
 import time
 from datetime import datetime, timezone
@@ -15,15 +16,13 @@ from ta.volatility import AverageTrueRange, BollingerBands
 # -----------------------------
 # SETTINGS
 # -----------------------------
-SYMBOL = "BTCUSD"
+CONFIG_FILE = "config/mt5_config_FXV.json"
 
-CONFIG_FILE = "config/mt5_config.json"
-
-MODEL_FILE = f"models/stage1_regime_{SYMBOL}/regime_model_{SYMBOL}.joblib"
-FEATURE_COLUMNS_FILE = f"models/stage1_regime_{SYMBOL}/feature_columns_{SYMBOL}.json"
-OUTPUT_FILE = f"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files/latest_regime_{SYMBOL}.txt"
-
-#OUTPUT_FILE = f"mt5/files/signals/latest_regime_{SYMBOL}.txt"
+# FXView
+MT5_FILES_DIR = Path(
+    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/"
+    "D544178D1D00BA11487CDDEC42EEF772/MQL5/Files"
+)
 
 
 REGIME_MAP = {
@@ -44,17 +43,20 @@ TIMEFRAME_MAP = {
     "M15": mt5.TIMEFRAME_M15,
     "M30": mt5.TIMEFRAME_M30,
     "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1,
 }
 
 
 # -----------------------------
 # LOAD CONFIG
 # -----------------------------
-def load_config():
+def load_config(symbol: str, timeframe: str):
     with open(CONFIG_FILE, "r") as f:
         config = json.load(f)
 
-    config["symbol"] = SYMBOL
+    config["symbol"] = symbol
+    config["timeframe"] = timeframe
     return config
 
 
@@ -169,10 +171,10 @@ def build_features(df):
 # -----------------------------
 # LOAD MODEL
 # -----------------------------
-def load_model():
-    model = joblib.load(MODEL_FILE)
+def load_model(model_file: Path, feature_columns_file: Path):
+    model = joblib.load(model_file)
 
-    with open(FEATURE_COLUMNS_FILE, "r") as f:
+    with open(feature_columns_file, "r") as f:
         feature_columns = json.load(f)
 
     print("Model loaded successfully.")
@@ -182,8 +184,8 @@ def load_model():
 # -----------------------------
 # WRITE OUTPUT FILE
 # -----------------------------
-def write_output_file(output_text):
-    output_path = Path(OUTPUT_FILE)
+def write_output_file(output_text: str, output_file: Path):
+    output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     temp_file = output_path.with_suffix(".tmp")
@@ -197,7 +199,7 @@ def write_output_file(output_text):
 # -----------------------------
 # PREDICT LIVE REGIME
 # -----------------------------
-def predict_live_regime(config, model, feature_columns):
+def predict_live_regime(config, model, feature_columns, output_file: Path):
     df = get_mt5_ohlc(config)
     features = build_features(df)
 
@@ -215,7 +217,8 @@ def predict_live_regime(config, model, feature_columns):
     pred_regime = int(model.predict(X_live)[0])
 
     probabilities = model.predict_proba(X_live)[0]
-    confidence = float(probabilities[pred_regime])
+    class_index = list(model.classes_).index(pred_regime)
+    confidence = float(probabilities[class_index])
 
     regime_name = REGIME_MAP.get(pred_regime, "Unknown")
 
@@ -233,10 +236,10 @@ def predict_live_regime(config, model, feature_columns):
         f"updated_utc={datetime.now(timezone.utc)}\n"
     )
 
-    write_output_file(output)
+    write_output_file(output, output_file)
 
     print(output)
-    print(f"Saved prediction to: {OUTPUT_FILE}")
+    print(f"Saved prediction to: {output_file}")
 
     return time_value
 
@@ -257,12 +260,32 @@ def wait_until_next_minute():
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
+    return parser.parse_args()
+
+
 def main():
-    config = load_config()
+    args = parse_args()
+    symbol = args.symbol
+    timeframe = args.timeframe.upper()
+
+    if timeframe not in TIMEFRAME_MAP:
+        valid_timeframes = ", ".join(TIMEFRAME_MAP)
+        raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
+
+    model_dir = Path(f"models/stage1_regime_{symbol}_{timeframe}")
+    model_file = model_dir / f"regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
+    output_file = MT5_FILES_DIR / f"latest_regime_{symbol}_{timeframe}.txt"
+
+    config = load_config(symbol, timeframe)
 
     connect_mt5(config)
 
-    model, feature_columns = load_model()
+    model, feature_columns = load_model(model_file, feature_columns_file)
 
     print("Live regime prediction loop started.")
     print("Press CTRL + C to stop.")
@@ -276,6 +299,7 @@ def main():
                     config=config,
                     model=model,
                     feature_columns=feature_columns,
+                    output_file=output_file,
                 )
 
                 if latest_time == last_processed_time:

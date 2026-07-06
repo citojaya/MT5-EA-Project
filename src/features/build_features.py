@@ -1,11 +1,12 @@
+import argparse
 import pandas as pd
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 
-INPUT_FILE = "data/raw/BTCUSD_bidask_M5_20260101_20261231.csv"
-OUTPUT_FILE = "data/features/BTCUSD_M5_features.csv"
+DATE_FROM = "20260101"
+DATE_TO = "20261231"
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -50,12 +51,25 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
+    return parser.parse_args()
+
 
 def main():
-    df = pd.read_csv(INPUT_FILE)
+    args = parse_args()
+    symbol = args.symbol
+    timeframe = args.timeframe.upper()
+
+    input_file = f"data/raw/{symbol}_bidask_{timeframe}_{DATE_FROM}_{DATE_TO}.csv"
+    output_file = f"data/features/{symbol}_{timeframe}_features.csv"
+
+    df = pd.read_csv(input_file)
     features = build_features(df)
-    features.to_csv(OUTPUT_FILE, index=False)
-    print(f"Saved features to {OUTPUT_FILE}")
+    features.to_csv(output_file, index=False)
+    print(f"Saved features to {output_file}")
     print(features.tail())
 
 

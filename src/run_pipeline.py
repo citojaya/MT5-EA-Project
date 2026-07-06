@@ -2,6 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 # -------------------------------------------------
 # MT5 ML Pipeline
 # -------------------------------------------------
@@ -9,46 +10,48 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-    "src/data/download_history.py BTCUSD"
-    #"src/features/build_features.py",
-    #"src/labels/create_regime_labels.py",
-    #"src/models/train_stage1_regime.py",
-    # "src/live/predict_live_regime.py",   # Uncomment if needed
-    #"src/labels/create_trade_labels.py",
-    #"src/models/train_stage2_trade.py",
+    ("src/data/download_history.py", "EURUSD", "M5"),
+     ("src/features/build_features.py","EURUSD", "M5"),
+     ("src/labels/create_regime_labels.py","EURUSD", "M5"),
+     ("src/models/train_stage1_regime.py", "EURUSD", "M5")
+    # ("src/live/predict_live_regime.py",),  # Uncomment if needed
+    # ("src/labels/create_trade_labels.py",),
+    # ("src/models/train_stage2_trade.py",),
 ]
 
 
-def run_script(script_path):
-    print("=" * 80)
-    print(f"Running: {script_path}")
-    print("=" * 80)
-
+def run_script(step):
+    script_path = step[0]
+    script_args = step[1:]
     full_path = PROJECT_ROOT / script_path
+    display_command = " ".join([script_path, *script_args])
+
+    print("=" * 80)
+    print(f"Running: {display_command}")
+    print("=" * 80)
 
     result = subprocess.run(
-        [sys.executable, str(full_path)],
+        [sys.executable, str(full_path), *script_args],
         cwd=PROJECT_ROOT,
-        text=True
+        text=True,
     )
 
     if result.returncode != 0:
         raise RuntimeError(
-            f"\nERROR running:\n{script_path}\nExit Code: {result.returncode}"
+            f"\nERROR running:\n{display_command}\nExit Code: {result.returncode}"
         )
 
-    print(f"✓ Finished: {script_path}\n")
+    print(f"Finished: {display_command}\n")
 
 
 def main():
-
     print("\n")
     print("=" * 80)
     print("Starting MT5 Machine Learning Pipeline")
     print("=" * 80)
 
-    for script in SCRIPTS:
-        run_script(script)
+    for step in SCRIPTS:
+        run_script(step)
 
     print("\n")
     print("=" * 80)
