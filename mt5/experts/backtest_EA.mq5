@@ -11,8 +11,8 @@
 #include <Trade/Trade.mqh>
 
 //--- Inputs ----------------------------------------------------------
-input string           InpFileName        = "latest_regime_XAUUSD_M1.txt"; // File name
-input bool             InpUseCommonFolder = false;                // Read from Common Files (MQL5\..\Common\Files)
+input string           InpFileName        = "XAUUSD_M1_backtest_signals.csv"; // File name
+input bool             InpUseCommonFolder = false;               // Read from Common Files (MQL5\..\Common\Files)
 input int              InpRefreshSeconds  = 5;                   // Refresh interval (seconds)
 input ENUM_BASE_CORNER InpCorner          = CORNER_LEFT_UPPER;   // Panel corner
 input int              InpXOffset         = 15;                  // X offset (px)
@@ -40,11 +40,24 @@ bool   g_fileOk  = false;
 string g_lastErr = "";
 CTrade g_trade;
 string g_lastTradeSignalTime = "";
+bool   g_signalsLoaded = false;
+datetime g_signalTimes[];
+string g_signalTimeText[];
+string g_signalSymbols[];
+string g_signalTimeframes[];
+string g_signalClose[];
+string g_signalRegimes[];
+string g_signalRegimeNames[];
+string g_signalConfidence[];
+string g_signalUpdatedUtc[];
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagicNumber);
+   g_signalsLoaded = LoadSignalCsv(InpFileName, InpUseCommonFolder);
+   if(!g_signalsLoaded)
+      Print(g_lastErr);
    EventSetTimer(MathMax(1, InpRefreshSeconds));
    ReadAndDisplay();
    return(INIT_SUCCEEDED);
@@ -75,28 +88,17 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void ReadAndDisplay()
   {
-   g_fileOk = ReadKeyValueFile(InpFileName, InpUseCommonFolder);
+   g_fileOk = SelectSignalForTesterTime();
    DrawPanel();
    ProcessTradingSignal();
    ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
-//| Parse a "key=value" line into g_keys/g_vals                       |
+//| Store one key/value pair                                          |
 //+------------------------------------------------------------------+
-void ProcessKeyValueLine(string line)
+void SetKeyValue(string key, string val)
   {
-   StringTrimLeft(line);
-   StringTrimRight(line);
-   if(StringLen(line) == 0)
-      return;
-
-   int pos = StringFind(line, "=");
-   if(pos <= 0)
-      return;
-
-   string key = StringSubstr(line, 0, pos);
-   string val = StringSubstr(line, pos + 1);
    StringTrimLeft(key);  StringTrimRight(key);
    StringTrimLeft(val);  StringTrimRight(val);
 
@@ -109,9 +111,73 @@ void ProcessKeyValueLine(string line)
   }
 
 //+------------------------------------------------------------------+
-//| Read a whole key=value text file, then process it line by line    |
+//| Split one CSV/TSV line                                            |
 //+------------------------------------------------------------------+
-bool ReadKeyValueFile(string filename, bool commonFolder)
+int SplitSignalLine(string line, string &fields[])
+  {
+   StringTrimLeft(line);
+   StringTrimRight(line);
+
+   ushort delimiter = StringGetCharacter(",", 0);
+   if(StringFind(line, "\t") >= 0)
+      delimiter = StringGetCharacter("\t", 0);
+
+   return StringSplit(line, delimiter, fields);
+  }
+
+//+------------------------------------------------------------------+
+//| Load selected row into key/value panel fields                     |
+//+------------------------------------------------------------------+
+void ProcessSignalFields(string &fields[])
+  {
+   if(ArraySize(fields) < 8)
+      return;
+
+   SetKeyValue("time",        fields[0]);
+   SetKeyValue("symbol",      fields[1]);
+   SetKeyValue("timeframe",   fields[2]);
+   SetKeyValue("close",       fields[3]);
+   SetKeyValue("regime",      fields[4]);
+   SetKeyValue("regime_name", fields[5]);
+   SetKeyValue("confidence",  fields[6]);
+   SetKeyValue("updated_utc", fields[7]);
+  }
+
+//+------------------------------------------------------------------+
+//| Store one CSV signal row in memory                                |
+//+------------------------------------------------------------------+
+void AppendSignalRow(string &fields[])
+  {
+   datetime signalTime = ParseUtcDateTime(fields[0]);
+   if(signalTime <= 0)
+      return;
+
+   int rowIndex = ArraySize(g_signalTimes);
+   ArrayResize(g_signalTimes, rowIndex + 1);
+   ArrayResize(g_signalTimeText, rowIndex + 1);
+   ArrayResize(g_signalSymbols, rowIndex + 1);
+   ArrayResize(g_signalTimeframes, rowIndex + 1);
+   ArrayResize(g_signalClose, rowIndex + 1);
+   ArrayResize(g_signalRegimes, rowIndex + 1);
+   ArrayResize(g_signalRegimeNames, rowIndex + 1);
+   ArrayResize(g_signalConfidence, rowIndex + 1);
+   ArrayResize(g_signalUpdatedUtc, rowIndex + 1);
+
+   g_signalTimes[rowIndex] = signalTime;
+   g_signalTimeText[rowIndex] = fields[0];
+   g_signalSymbols[rowIndex] = fields[1];
+   g_signalTimeframes[rowIndex] = fields[2];
+   g_signalClose[rowIndex] = fields[3];
+   g_signalRegimes[rowIndex] = fields[4];
+   g_signalRegimeNames[rowIndex] = fields[5];
+   g_signalConfidence[rowIndex] = fields[6];
+   g_signalUpdatedUtc[rowIndex] = fields[7];
+  }
+
+//+------------------------------------------------------------------+
+//| Read signal CSV/TSV once                                          |
+//+------------------------------------------------------------------+
+bool LoadSignalCsv(string filename, bool commonFolder)
   {
    g_count = 0;
    for(int kvIndex = 0; kvIndex < MAX_KV; kvIndex++)
@@ -131,26 +197,92 @@ bool ReadKeyValueFile(string filename, bool commonFolder)
       return false;
      }
 
-   ulong fileSize = FileSize(handle);
-   if(fileSize == 0)
+   ArrayResize(g_signalTimes, 0);
+   ArrayResize(g_signalTimeText, 0);
+   ArrayResize(g_signalSymbols, 0);
+   ArrayResize(g_signalTimeframes, 0);
+   ArrayResize(g_signalClose, 0);
+   ArrayResize(g_signalRegimes, 0);
+   ArrayResize(g_signalRegimeNames, 0);
+   ArrayResize(g_signalConfidence, 0);
+   ArrayResize(g_signalUpdatedUtc, 0);
+
+   while(!FileIsEnding(handle))
      {
-      FileClose(handle);
-      g_lastErr = "";
-      return true;
+      string line = FileReadString(handle);
+      StringTrimLeft(line);
+      StringTrimRight(line);
+      if(StringLen(line) == 0)
+         continue;
+
+      string fields[];
+      int fieldCount = SplitSignalLine(line, fields);
+      if(fieldCount < 8)
+         continue;
+
+      string firstField = fields[0];
+      StringToLower(firstField);
+      if(firstField == "time")
+         continue;
+
+      AppendSignalRow(fields);
      }
 
-   string fileText = FileReadString(handle, (int)fileSize);
    FileClose(handle);
 
-   StringReplace(fileText, "\r\n", "\n");
-   StringReplace(fileText, "\r", "\n");
+   if(ArraySize(g_signalTimes) == 0)
+     {
+      g_lastErr = "No signal rows loaded from file: " + filename;
+      return false;
+     }
 
-   string lines[];
-   ushort newline = StringGetCharacter("\n", 0);
-   int lineCount = StringSplit(fileText, newline, lines);
+   g_lastErr = "";
+   return true;
+  }
 
-   for(int lineIndex = 0; lineIndex < lineCount && g_count < MAX_KV; lineIndex++)
-      ProcessKeyValueLine(lines[lineIndex]);
+//+------------------------------------------------------------------+
+//| Select latest loaded signal row at/before tester time             |
+//+------------------------------------------------------------------+
+bool SelectSignalForTesterTime()
+  {
+   g_count = 0;
+   for(int kvIndex = 0; kvIndex < MAX_KV; kvIndex++)
+     {
+      g_keys[kvIndex] = "";
+      g_vals[kvIndex] = "";
+     }
+
+   if(!g_signalsLoaded)
+      return false;
+
+   datetime testerTime = TimeCurrent();
+   int selectedIndex = -1;
+   datetime selectedTime = 0;
+
+   for(int rowIndex = 0; rowIndex < ArraySize(g_signalTimes); rowIndex++)
+     {
+      datetime signalTime = g_signalTimes[rowIndex];
+      if(signalTime <= testerTime && signalTime >= selectedTime)
+        {
+         selectedIndex = rowIndex;
+         selectedTime = signalTime;
+        }
+     }
+
+   if(selectedIndex < 0)
+     {
+      g_lastErr = "No signal row found at/before tester time: " + TimeToString(testerTime, TIME_DATE | TIME_MINUTES);
+      return false;
+     }
+
+   SetKeyValue("time",        g_signalTimeText[selectedIndex]);
+   SetKeyValue("symbol",      g_signalSymbols[selectedIndex]);
+   SetKeyValue("timeframe",   g_signalTimeframes[selectedIndex]);
+   SetKeyValue("close",       g_signalClose[selectedIndex]);
+   SetKeyValue("regime",      g_signalRegimes[selectedIndex]);
+   SetKeyValue("regime_name", g_signalRegimeNames[selectedIndex]);
+   SetKeyValue("confidence",  g_signalConfidence[selectedIndex]);
+   SetKeyValue("updated_utc", g_signalUpdatedUtc[selectedIndex]);
 
    g_lastErr = "";
    return true;
