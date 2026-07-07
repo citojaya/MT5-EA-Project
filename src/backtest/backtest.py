@@ -120,7 +120,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        help="Optional output CSV path. Defaults to src/backtest/{symbol}_{timeframe}_backtest_signals.csv",
+        help="Optional output CSV path. Defaults to data/backtest/{symbol}_{timeframe}_backtest_signals.csv",
     )
     return parser.parse_args()
 
@@ -131,13 +131,13 @@ def main():
     timeframe = args.timeframe.upper()
 
     input_file = Path(f"data/features/{symbol}_{timeframe}_features.csv")
-    model_dir = Path(f"models/stage1_regime_{symbol}_{timeframe}")
-    model_file = model_dir / f"regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
+    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
     output_file = (
         Path(args.output)
         if args.output
-        else Path(f"src/backtest/{symbol}_{timeframe}_backtest_signals.csv")
+        else Path(f"data/backtest/{symbol}_{timeframe}_backtest_signals.csv")
     )
 
     features = pd.read_csv(input_file)

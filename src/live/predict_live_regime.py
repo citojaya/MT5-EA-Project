@@ -22,7 +22,8 @@ CONFIG_FILE = "config/mt5_config_FXV.json"
 
 # FXView
 MT5_FILES_DIR = Path(
-    "C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files"
+    #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop
+    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop
 
 )
 
@@ -342,9 +343,9 @@ def main():
         valid_timeframes = ", ".join(TIMEFRAME_MAP)
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
-    model_dir = Path(f"models/stage1_regime_{symbol}_{timeframe}")
-    model_file = model_dir / f"regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
+    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
     output_file = MT5_FILES_DIR / f"latest_regime_{symbol}_{timeframe}.txt"
 
     config = load_config(symbol, timeframe)

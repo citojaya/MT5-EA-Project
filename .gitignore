@@ -8,7 +8,7 @@ data/raw/
 data/processed/
 data/features/
 data/labels/
-models/
+data/models/
 reports/logs/
 
 *.csv
