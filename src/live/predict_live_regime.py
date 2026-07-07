@@ -215,7 +215,7 @@ def write_output_file(output_text: str, output_file: Path):
 # -----------------------------
 # APPEND SIGNAL CSV
 # -----------------------------
-def append_signal_line(signal: dict, signal_file: Path = APPEND_SIGNAL_FILE):
+def append_signal_line(signal: dict, signal_file: Path):
     signal_path = Path(signal_file)
     signal_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -249,7 +249,7 @@ def append_signal_line(signal: dict, signal_file: Path = APPEND_SIGNAL_FILE):
 # -----------------------------
 # PREDICT LIVE REGIME
 # -----------------------------
-def predict_live_regime(config, model, feature_columns, output_file: Path):
+def predict_live_regime(config, model, feature_columns):
     df = get_mt5_ohlc(config)
     features = build_features(df)
 
@@ -298,17 +298,9 @@ def predict_live_regime(config, model, feature_columns, output_file: Path):
         f"updated_utc={updated_utc}\n"
     )
 
-    write_output_file(output, output_file)
-    signal_appended = append_signal_line(signal)
-
     print(output)
-    print(f"Saved prediction to: {output_file}")
-    if signal_appended:
-        print(f"Appended signal to: {APPEND_SIGNAL_FILE}")
-    else:
-        print(f"Signal already logged in: {APPEND_SIGNAL_FILE}")
 
-    return time_value
+    return time_value, signal, output
 
 
 # -----------------------------
@@ -347,6 +339,7 @@ def main():
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
     output_file = MT5_FILES_DIR / f"latest_regime_{symbol}_{timeframe}.txt"
+    append_signal_file = APPEND_SIGNAL_FILE
 
     config = load_config(symbol, timeframe)
 
@@ -362,17 +355,23 @@ def main():
     try:
         while True:
             try:
-                latest_time = predict_live_regime(
+                latest_time, signal, output = predict_live_regime(
                     config=config,
                     model=model,
                     feature_columns=feature_columns,
-                    output_file=output_file,
                 )
 
                 if latest_time == last_processed_time:
                     print(f"No new candle. Last candle time: {latest_time}")
                 else:
                     last_processed_time = latest_time
+                    write_output_file(output, output_file)
+                    print(f"Saved prediction to: {output_file}")
+
+                    if append_signal_line(signal, append_signal_file):
+                        print(f"Appended signal to: {append_signal_file}")
+                    else:
+                        print(f"Signal already logged in: {append_signal_file}")
 
             except Exception as e:
                 print(f"Error during prediction: {e}")
