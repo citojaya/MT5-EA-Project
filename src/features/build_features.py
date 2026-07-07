@@ -5,7 +5,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 
-DATE_FROM = "20240101"
+DATE_FROM = "20250101"
 DATE_TO = "20261231"
 
 
