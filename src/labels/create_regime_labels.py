@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 import pandas as pd
 
@@ -17,6 +18,8 @@ REGIME_MAP = {
 
 def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    df = df.sort_values("time")
 
     # ATR percentile over rolling window
     df["atr_pct_rank"] = (
@@ -86,10 +89,32 @@ def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def filter_date_range(
+    df: pd.DataFrame,
+    start: str | None,
+    end: str | None,
+) -> pd.DataFrame:
+    if start is None and end is None:
+        return df
+
+    if start is None or end is None:
+        raise ValueError("Both start and end must be provided when filtering by date")
+
+    start_time = pd.to_datetime(start, utc=True)
+    end_time = pd.to_datetime(end, utc=True)
+
+    if start_time > end_time:
+        raise ValueError("start must be before or equal to end")
+
+    return df[(df["time"] >= start_time) & (df["time"] <= end_time)].copy()
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
+    parser.add_argument("start", nargs="?", help="Optional start datetime, e.g. 2025-01-01")
+    parser.add_argument("end", nargs="?", help="Optional end datetime, e.g. 2025-06-30 23:59")
     return parser.parse_args()
 
 
@@ -99,15 +124,22 @@ def main():
     timeframe = args.timeframe.upper()
 
     input_file = f"data/features/{symbol}_{timeframe}_features.csv"
-    output_file = f"data/labels/{symbol}_{timeframe}_regime_labels.csv"
+    output_file = Path(f"data/labels/{symbol}_{timeframe}_regime_labels.csv")
 
     df = pd.read_csv(input_file)
 
     labelled = create_regime_labels(df)
+    labelled = filter_date_range(labelled, args.start, args.end)
 
+    if labelled.empty:
+        raise RuntimeError("No regime label rows found for the selected date range")
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     labelled.to_csv(output_file, index=False)
 
     print(f"Saved regime labels to: {output_file}")
+    if args.start and args.end:
+        print(f"Date range: {args.start} to {args.end}")
     print()
     print(labelled["regime_name"].value_counts())
     print()
