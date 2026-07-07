@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import time
 from datetime import datetime, timezone
@@ -18,11 +19,25 @@ from ta.volatility import AverageTrueRange, BollingerBands
 # -----------------------------
 CONFIG_FILE = "config/mt5_config_FXV.json"
 
+
 # FXView
 MT5_FILES_DIR = Path(
-    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/"
-    "D544178D1D00BA11487CDDEC42EEF772/MQL5/Files"
+    "C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files"
+
 )
+
+APPEND_SIGNAL_FILE = MT5_FILES_DIR / "append_signal.csv"
+
+SIGNAL_COLUMNS = [
+    "time",
+    "symbol",
+    "timeframe",
+    "close",
+    "regime",
+    "regime_name",
+    "confidence",
+    "updated_utc",
+]
 
 
 REGIME_MAP = {
@@ -197,6 +212,40 @@ def write_output_file(output_text: str, output_file: Path):
 
 
 # -----------------------------
+# APPEND SIGNAL CSV
+# -----------------------------
+def append_signal_line(signal: dict, signal_file: Path = APPEND_SIGNAL_FILE):
+    signal_path = Path(signal_file)
+    signal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    row = {column: signal.get(column, "") for column in SIGNAL_COLUMNS}
+
+    if signal_path.exists() and signal_path.stat().st_size > 0:
+        try:
+            last_row = pd.read_csv(signal_path, usecols=["time", "symbol", "timeframe"]).tail(1)
+            if not last_row.empty:
+                latest = last_row.iloc[0]
+                if (
+                    str(latest["time"]) == str(row["time"])
+                    and str(latest["symbol"]) == str(row["symbol"])
+                    and str(latest["timeframe"]) == str(row["timeframe"])
+                ):
+                    return False
+        except (ValueError, pd.errors.EmptyDataError):
+            pass
+
+    write_header = not signal_path.exists() or signal_path.stat().st_size == 0
+
+    with open(signal_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SIGNAL_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    return True
+
+
+# -----------------------------
 # PREDICT LIVE REGIME
 # -----------------------------
 def predict_live_regime(config, model, feature_columns, output_file: Path):
@@ -224,6 +273,18 @@ def predict_live_regime(config, model, feature_columns, output_file: Path):
 
     time_value = latest_row["time"].iloc[0]
     close_value = float(latest_row["close"].iloc[0])
+    updated_utc = datetime.now(timezone.utc)
+
+    signal = {
+        "time": time_value,
+        "symbol": config["symbol"],
+        "timeframe": config.get("timeframe", "M5"),
+        "close": close_value,
+        "regime": pred_regime,
+        "regime_name": regime_name,
+        "confidence": round(confidence, 6),
+        "updated_utc": updated_utc,
+    }
 
     output = (
         f"time={time_value}\n"
@@ -233,13 +294,18 @@ def predict_live_regime(config, model, feature_columns, output_file: Path):
         f"regime={pred_regime}\n"
         f"regime_name={regime_name}\n"
         f"confidence={confidence:.4f}\n"
-        f"updated_utc={datetime.now(timezone.utc)}\n"
+        f"updated_utc={updated_utc}\n"
     )
 
     write_output_file(output, output_file)
+    signal_appended = append_signal_line(signal)
 
     print(output)
     print(f"Saved prediction to: {output_file}")
+    if signal_appended:
+        print(f"Appended signal to: {APPEND_SIGNAL_FILE}")
+    else:
+        print(f"Signal already logged in: {APPEND_SIGNAL_FILE}")
 
     return time_value
 
