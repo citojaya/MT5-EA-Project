@@ -6,10 +6,11 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 
+config_file = "mt5_config.json"
 # -----------------------------
 # USER SETTINGS
 # -----------------------------
-with open("config/mt5_config_FXV.json", "r", encoding="utf-8") as f:
+with open("config/"+config_file, "r", encoding="utf-8") as f:
     cfg = json.load(f)
 
 ACCOUNT = int(cfg["login"])
@@ -105,6 +106,11 @@ def parse_args():
 def main():
     args = parse_args()
     symbol = args.symbol
+
+    if (config_file == "mt5_config.json"):
+        symbol = args.symbol+".a"
+    else:
+        symbol = args.symbol
     timeframe_name = args.timeframe.upper()
 
     if timeframe_name not in TIMEFRAME_MAP:
@@ -112,7 +118,7 @@ def main():
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
     out_csv = (
-        f"data/raw/{symbol}_bidask_{timeframe_name}_"
+        f"data/raw/{symbol[:6]}_bidask_{timeframe_name}_"
         f"{DATE_FROM:%Y%m%d}_{DATE_TO:%Y%m%d}.csv"
     )
 

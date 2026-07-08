@@ -1,22 +1,16 @@
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 import joblib
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
-REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
-}
+from src.signals.regime_signals import generate_regime_signals
 
 
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -71,46 +65,6 @@ def add_missing_regime_rank_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna()
 
 
-def generate_backtest_signals(
-    features: pd.DataFrame,
-    model,
-    feature_columns: list[str],
-    symbol: str,
-    timeframe: str,
-) -> pd.DataFrame:
-    missing_cols = [col for col in feature_columns if col not in features.columns]
-    if missing_cols:
-        raise ValueError(f"Missing feature columns: {missing_cols}")
-
-    x = features[feature_columns]
-    predictions = model.predict(x)
-    probabilities = model.predict_proba(x)
-    classes = list(model.classes_)
-
-    rows = []
-    updated_utc = datetime.now(timezone.utc)
-
-    for row_index, (_, row) in enumerate(features.iterrows()):
-        regime = int(predictions[row_index])
-        class_index = classes.index(regime)
-        confidence = float(probabilities[row_index][class_index])
-
-        rows.append(
-            {
-                "time": row["time"],
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "close": float(row["close"]),
-                "regime": regime,
-                "regime_name": REGIME_MAP.get(regime, "Unknown"),
-                "confidence": round(confidence, 6),
-                "updated_utc": updated_utc,
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
@@ -148,7 +102,7 @@ def main():
         raise RuntimeError("No feature rows found for the selected date range")
 
     model, feature_columns = load_model(model_file, feature_columns_file)
-    signals = generate_backtest_signals(
+    signals = generate_regime_signals(
         features=features,
         model=model,
         feature_columns=feature_columns,

@@ -4,14 +4,18 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 import joblib
 import pandas as pd
 import MetaTrader5 as mt5
 
-from ta.trend import EMAIndicator, ADXIndicator
-from ta.momentum import RSIIndicator
-from ta.volatility import AverageTrueRange, BollingerBands
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.features.build_features import build_features
+from src.signals.regime_signals import generate_regime_signals
 
 
 # -----------------------------
@@ -39,18 +43,6 @@ SIGNAL_COLUMNS = [
     "confidence",
     "updated_utc",
 ]
-
-
-REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
-}
 
 
 TIMEFRAME_MAP = {
@@ -129,62 +121,6 @@ def get_mt5_ohlc(config):
 
 
 # -----------------------------
-# BUILD FEATURES
-# -----------------------------
-def build_features(df):
-    df = df.copy()
-    df = df.sort_values("time")
-
-    df["ema_9"] = EMAIndicator(df["close"], window=9).ema_indicator()
-    df["ema_21"] = EMAIndicator(df["close"], window=21).ema_indicator()
-    df["ema_50"] = EMAIndicator(df["close"], window=50).ema_indicator()
-    df["ema_200"] = EMAIndicator(df["close"], window=200).ema_indicator()
-
-    df["rsi_14"] = RSIIndicator(df["close"], window=14).rsi()
-
-    adx = ADXIndicator(df["high"], df["low"], df["close"], window=14)
-    df["adx_14"] = adx.adx()
-    df["di_plus"] = adx.adx_pos()
-    df["di_minus"] = adx.adx_neg()
-
-    atr = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
-    df["atr_14"] = atr.average_true_range()
-    df["atr_pct"] = df["atr_14"] / df["close"]
-
-    bb = BollingerBands(df["close"], window=20, window_dev=2)
-    df["bb_width"] = (
-        bb.bollinger_hband() - bb.bollinger_lband()
-    ) / df["close"]
-
-    df["body_size"] = abs(df["close"] - df["open"])
-    df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
-    df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
-
-    df["hour"] = df["time"].dt.hour
-    df["day_of_week"] = df["time"].dt.dayofweek
-
-    df["ema_9_slope"] = df["ema_9"].diff()
-    df["ema_21_slope"] = df["ema_21"].diff()
-    df["ema_50_slope"] = df["ema_50"].diff()
-
-    df["atr_pct_rank"] = (
-        df["atr_pct"]
-        .rolling(window=500, min_periods=100)
-        .rank(pct=True)
-    )
-
-    df["bb_width_rank"] = (
-        df["bb_width"]
-        .rolling(window=500, min_periods=100)
-        .rank(pct=True)
-    )
-
-    df = df.dropna()
-
-    return df
-
-
-# -----------------------------
 # LOAD MODEL
 # -----------------------------
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -257,45 +193,26 @@ def predict_live_regime(config, model, feature_columns):
         raise RuntimeError("Feature dataframe is empty after indicator calculation.")
 
     latest_row = features.tail(1).copy()
+    signals = generate_regime_signals(
+        features=latest_row,
+        model=model,
+        feature_columns=feature_columns,
+        symbol=config["symbol"],
+        timeframe=config.get("timeframe", "M5"),
+    )
+    signal = signals.iloc[-1].to_dict()
 
-    missing_cols = [col for col in feature_columns if col not in latest_row.columns]
-    if missing_cols:
-        raise ValueError(f"Missing feature columns: {missing_cols}")
-
-    X_live = latest_row[feature_columns]
-
-    pred_regime = int(model.predict(X_live)[0])
-
-    probabilities = model.predict_proba(X_live)[0]
-    class_index = list(model.classes_).index(pred_regime)
-    confidence = float(probabilities[class_index])
-
-    regime_name = REGIME_MAP.get(pred_regime, "Unknown")
-
-    time_value = latest_row["time"].iloc[0]
-    close_value = float(latest_row["close"].iloc[0])
-    updated_utc = datetime.now(timezone.utc)
-
-    signal = {
-        "time": time_value,
-        "symbol": config["symbol"],
-        "timeframe": config.get("timeframe", "M5"),
-        "close": close_value,
-        "regime": pred_regime,
-        "regime_name": regime_name,
-        "confidence": round(confidence, 6),
-        "updated_utc": updated_utc,
-    }
+    time_value = signal["time"]
 
     output = (
         f"time={time_value}\n"
-        f"symbol={config['symbol']}\n"
-        f"timeframe={config.get('timeframe', 'M5')}\n"
-        f"close={close_value}\n"
-        f"regime={pred_regime}\n"
-        f"regime_name={regime_name}\n"
-        f"confidence={confidence:.4f}\n"
-        f"updated_utc={updated_utc}\n"
+        f"symbol={signal['symbol']}\n"
+        f"timeframe={signal['timeframe']}\n"
+        f"close={signal['close']}\n"
+        f"regime={signal['regime']}\n"
+        f"regime_name={signal['regime_name']}\n"
+        f"confidence={signal['confidence']:.4f}\n"
+        f"updated_utc={signal['updated_utc']}\n"
     )
 
     print(output)

@@ -47,6 +47,18 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_21_slope"] = df["ema_21"].diff()
     df["ema_50_slope"] = df["ema_50"].diff()
 
+    df["atr_pct_rank"] = (
+        df["atr_pct"]
+        .rolling(window=500, min_periods=100)
+        .rank(pct=True)
+    )
+
+    df["bb_width_rank"] = (
+        df["bb_width"]
+        .rolling(window=500, min_periods=100)
+        .rank(pct=True)
+    )
+
     df = df.dropna()
 
     return df
