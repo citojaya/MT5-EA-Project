@@ -11,6 +11,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.signals.regime_signals import generate_regime_signals
+from src.features.build_features import DATE_FROM, DATE_TO, build_features
+
+
+HISTORY_BARS = 1000
 
 
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -65,6 +69,30 @@ def add_missing_regime_rank_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna()
 
 
+def select_raw_history(
+    df: pd.DataFrame,
+    start: str,
+    end: str,
+    history_bars: int = HISTORY_BARS,
+) -> pd.DataFrame:
+    df = df.copy()
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    df = df.sort_values("time").reset_index(drop=True)
+
+    start_time = pd.to_datetime(start, utc=True)
+    end_time = pd.to_datetime(end, utc=True)
+    if start_time > end_time:
+        raise ValueError("start must be before or equal to end")
+
+    period_indexes = df.index[(df["time"] >= start_time) & (df["time"] <= end_time)]
+    if period_indexes.empty:
+        return df.iloc[0:0].copy()
+
+    first_index = max(0, int(period_indexes[0]) - history_bars + 1)
+    last_index = int(period_indexes[-1])
+    return df.iloc[first_index:last_index + 1].copy()
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
@@ -76,6 +104,11 @@ def parse_args():
         type=str,
         help="Optional output CSV path. Defaults to data/backtest/{symbol}_{timeframe}_backtest_signals.csv",
     )
+    parser.add_argument(
+        "--rebuild-features",
+        action="store_true",
+        help="Rebuild and cache features from the raw OHLC CSV before backtesting",
+    )
     return parser.parse_args()
 
 
@@ -85,6 +118,9 @@ def main():
     timeframe = args.timeframe.upper()
 
     input_file = Path(f"data/features/{symbol}_{timeframe}_features.csv")
+    raw_file = Path(
+        f"data/raw/{symbol}_bidask_{timeframe}_{DATE_FROM}_{DATE_TO}.csv"
+    )
     model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
     model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
@@ -94,7 +130,20 @@ def main():
         else Path(f"data/backtest/{symbol}_{timeframe}_backtest_signals.csv")
     )
 
-    features = pd.read_csv(input_file)
+    if args.rebuild_features:
+        raw_data = pd.read_csv(raw_file)
+        raw_data = select_raw_history(raw_data, args.start, args.end)
+        if raw_data.empty:
+            raise RuntimeError("No raw OHLC rows found for the selected date range")
+
+        features = build_features(raw_data)
+        input_file.parent.mkdir(parents=True, exist_ok=True)
+        features.to_csv(input_file, index=False)
+        print(f"Rebuilt features from: {raw_file} ({HISTORY_BARS}-bar history)")
+        print(f"Cached features to: {input_file}")
+    else:
+        features = pd.read_csv(input_file)
+
     features = add_missing_regime_rank_features(features)
     features = filter_date_range(features, args.start, args.end)
 

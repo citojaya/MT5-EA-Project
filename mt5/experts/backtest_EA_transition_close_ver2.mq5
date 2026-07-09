@@ -427,9 +427,9 @@ void ProcessTradingSignal()
    string regimeLower = regimeName;
    StringToLower(regimeLower);
 
-   if(StringFind(regimeLower, "transition") >= 0)
+   if(StringFind(regimeLower, "transition") >= 0 || StringFind(regimeLower, "high volatility") >= 0)
      {
-      CloseManagedPosition("Transition regime");
+      CloseManagedPosition("Transition or high volatility regime");
       g_lastTradeSignalTime = signalTime;
       return;
      }

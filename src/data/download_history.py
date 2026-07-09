@@ -6,7 +6,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 
-config_file = "mt5_config.json"
+config_file = "mt5_config_FXV.json"
 # -----------------------------
 # USER SETTINGS
 # -----------------------------
@@ -27,7 +27,7 @@ TIMEFRAME_MAP = {
     "D1": mt5.TIMEFRAME_D1,
 }
 
-DATE_FROM = datetime(2025, 1, 1, tzinfo=timezone.utc)
+DATE_FROM = datetime(2026, 6, 1, tzinfo=timezone.utc)
 DATE_TO = datetime(2026, 12, 31, tzinfo=timezone.utc)
 
 

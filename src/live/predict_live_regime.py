@@ -99,7 +99,8 @@ def get_mt5_ohlc(config):
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Could not select symbol: {symbol}")
 
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
+    # Start at position 1 so inference only uses completed candles.
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 1, bars)
 
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No MT5 data received for {symbol}")
@@ -108,14 +109,13 @@ def get_mt5_ohlc(config):
 
     df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
 
-    tick = mt5.symbol_info_tick(symbol)
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        raise RuntimeError(f"Symbol info not found: {symbol}")
 
-    if tick is not None:
-        df["bid"] = tick.bid
-        df["ask"] = tick.ask
-    else:
-        df["bid"] = df["close"]
-        df["ask"] = df["close"]
+    # Match the historical downloader's per-candle bid/ask reconstruction.
+    df["bid"] = df["close"]
+    df["ask"] = df["close"] + df["spread"] * symbol_info.point
 
     return df
 
