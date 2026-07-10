@@ -27,7 +27,7 @@ TIMEFRAME_MAP = {
     "D1": mt5.TIMEFRAME_D1,
 }
 
-DATE_FROM = datetime(2026, 6, 1, tzinfo=timezone.utc)
+DATE_FROM = datetime(2026, 1, 1, tzinfo=timezone.utc)
 DATE_TO = datetime(2026, 12, 31, tzinfo=timezone.utc)
 
 

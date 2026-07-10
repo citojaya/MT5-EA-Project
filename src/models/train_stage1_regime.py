@@ -12,6 +12,39 @@ EXCLUDED_COLUMNS = {"time", "regime", "regime_name"}
 TEST_SIZE = 0.20
 RANDOM_STATE = 42
 
+NORMALIZED_FEATURE_COLUMNS = [
+    "rsi_14",
+    "adx_14",
+    "di_plus",
+    "di_minus",
+    "atr_pct",
+    "atr_pct_rank",
+    "bb_width",
+    "bb_width_rank",
+    "return_1",
+    "return_3",
+    "return_6",
+    "return_12",
+    "range_pct",
+    "body_pct",
+    "upper_wick_pct",
+    "lower_wick_pct",
+    "open_close_pct",
+    "high_close_pct",
+    "low_close_pct",
+    "ema_9_dist_pct",
+    "ema_21_dist_pct",
+    "ema_50_dist_pct",
+    "ema_200_dist_pct",
+    "ema_9_slope_pct",
+    "ema_21_slope_pct",
+    "ema_50_slope_pct",
+    "spread_pct",
+    "tick_volume_ratio_20",
+    "hour",
+    "day_of_week",
+]
+
 
 def load_dataset(input_file: Path) -> pd.DataFrame:
     df = pd.read_csv(input_file)
@@ -42,9 +75,25 @@ def filter_date_range(
 
 
 def select_feature_columns(df: pd.DataFrame) -> list[str]:
-    candidate_columns = [column for column in df.columns if column not in EXCLUDED_COLUMNS]
-    numeric_columns = df[candidate_columns].select_dtypes(include="number").columns
-    return list(numeric_columns)
+    missing_columns = [
+        column for column in NORMALIZED_FEATURE_COLUMNS if column not in df.columns
+    ]
+    if missing_columns:
+        missing_text = ", ".join(missing_columns)
+        raise ValueError(
+            "Missing normalized feature columns. Rebuild features and labels first: "
+            f"{missing_text}"
+        )
+
+    numeric_columns = df[NORMALIZED_FEATURE_COLUMNS].select_dtypes(include="number").columns
+    non_numeric_columns = [
+        column for column in NORMALIZED_FEATURE_COLUMNS if column not in numeric_columns
+    ]
+    if non_numeric_columns:
+        non_numeric_text = ", ".join(non_numeric_columns)
+        raise ValueError(f"Normalized feature columns must be numeric: {non_numeric_text}")
+
+    return NORMALIZED_FEATURE_COLUMNS.copy()
 
 
 def chronological_split(

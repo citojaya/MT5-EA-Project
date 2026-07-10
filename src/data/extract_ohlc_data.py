@@ -8,7 +8,7 @@ import pandas as pd
 
 DEFAULT_SYMBOL = "XAUUSD"
 DEFAULT_BARS = 2000
-DEFAULT_CONFIG = "config/mt5_config_FXV_live.json"
+DEFAULT_CONFIG = "config/mt5_config_FXV.json"
 OUTPUT_FILE = Path("data/raw/ohlc_data_XAUUSD.csv")
 
 

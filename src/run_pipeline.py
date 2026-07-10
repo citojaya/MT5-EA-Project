@@ -10,13 +10,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-  #("src/data/download_history.py", "GBPJPY", "M5"),
-   #("src/features/build_features.py","GBPJPY", "M5"),
-   ("src/labels/create_regime_labels.py","GBPJPY", "M5","2025-01-01", "2025-07-30"),
-   ("src/models/train_stage1_regime.py", "GBPJPY", "M5","backtest","2025-07-01", "2026-07-30 23:59"),
-   
-   ("src/backtest/backtest.py", "GBPJPY", "M5", "2025-07-01", "2026-07-09 23:59")
-   #("python src/backtest/backtest.py GBPJPY M5 2026-01-01 2026-07-09 --rebuild-features")
+  #("src/data/download_history.py", "XAUUSD", "M5"),
+   #("src/features/build_features.py","XAUUSD", "M5"),
+   #("src/labels/create_regime_labels.py","XAUUSD", "M5","2025-01-01", "2025-12-30"),
+   #("src/models/train_stage1_regime.py", "XAUUSD", "M5","live","2025-01-01", "2025-12-30 23:59"),
+   ("src/backtest/backtest_line_by_line.py", "XAUUSD", "M5")
+   #("src/backtest/backtest.py", "XAUUSD", "M5", "2025-07-01", "2026-07-09 23:59")
+   #("src/backtest/backtest.py XAUUSD M5 2026-01-01 2026-07-09 --rebuild-features")
     # ("src/live/predict_live_regime.py",),  # Uncomment if needed
     # ("src/labels/create_trade_labels.py",),
     # ("src/models/train_stage2_trade.py",),
