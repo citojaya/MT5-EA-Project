@@ -63,7 +63,7 @@ def load_model(model_file: Path, feature_columns_file: Path):
     with open(feature_columns_file, "r") as f:
         feature_columns = json.load(f)
 
-    print("Model loaded successfully.")
+    #print("Model loaded successfully.")
     return model, feature_columns
 
 
@@ -126,7 +126,7 @@ def predict_regime(config, model, feature_columns, data: pd.DataFrame, row_index
         f"updated_utc={signal['updated_utc']}\n"
     )
 
-    print(output)
+    #print(output)
 
     return time_value, signal, output
 
@@ -160,9 +160,9 @@ def main():
     data = pd.read_csv(input_file)
     data["time"] = pd.to_datetime(data["time"], utc=True)
 
-    print("Line-by-line backtest prediction loop started.")
-    print(f"Input: {input_file}")
-    print(f"Output: {output_file}")
+    #print("Line-by-line backtest prediction loop started.")
+    #print(f"Input: {input_file}")
+    #print(f"Output: {output_file}")
 
     bars = int(config.get("bars", 1000))
     if len(data) < bars:
@@ -179,7 +179,7 @@ def main():
             )
 
             append_signal_line(signal, output_file)
-            print(f"Appended signal for candle: {latest_time}")
+            #print(f"Appended signal for candle: {latest_time}")
 
         except Exception as e:
             print(f"Error during prediction at row {row_index}: {e}")
