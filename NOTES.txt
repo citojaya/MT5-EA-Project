@@ -1,0 +1,10 @@
+Margin and commissions
+
+IC Markets
+
+Symbol      Lot     Margin      commissions
+US30        0.1     378             0
+XAUUSD      0.01    293             0
+USDJPY      0.1     479             0
+GBPUSD      0.1     672             0
+EURUSD      0.1     547             0
