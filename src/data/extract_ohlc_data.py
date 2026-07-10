@@ -53,6 +53,12 @@ def connect_mt5(login: int, server: str, password: str):
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
 
+def resolve_mt5_symbol(symbol: str, config_path: Path) -> str:
+    if config_path.name == "mt5_config.json" and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    return symbol
+
+
 def fetch_ohlc(symbol: str, bars: int, include_current: bool) -> pd.DataFrame:
     if bars <= 0:
         raise ValueError("bars must be greater than zero")
@@ -96,10 +102,11 @@ def fetch_ohlc(symbol: str, bars: int, include_current: bool) -> pd.DataFrame:
 def main():
     args = parse_args()
     login, server, password = load_credentials(args)
+    mt5_symbol = resolve_mt5_symbol(args.symbol, Path(args.config))
 
     connect_mt5(login, server, password)
     try:
-        df = fetch_ohlc(args.symbol, args.bars, args.include_current)
+        df = fetch_ohlc(mt5_symbol, args.bars, args.include_current)
         if df.empty:
             print("No OHLC data returned.")
             return

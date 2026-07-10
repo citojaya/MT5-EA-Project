@@ -31,6 +31,12 @@ DATE_FROM = datetime(2025, 1, 1, tzinfo=timezone.utc)
 DATE_TO = datetime(2026, 12, 31, tzinfo=timezone.utc)
 
 
+def resolve_mt5_symbol(symbol: str) -> str:
+    if config_file == "mt5_config.json" and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    return symbol
+
+
 # =========================================================
 # MT5 HELPERS
 # =========================================================
@@ -106,11 +112,7 @@ def parse_args():
 def main():
     args = parse_args()
     symbol = args.symbol
-
-    if (config_file == "mt5_config.json"):
-        symbol = args.symbol+".a"
-    else:
-        symbol = args.symbol
+    mt5_symbol = resolve_mt5_symbol(symbol)
     timeframe_name = args.timeframe.upper()
 
     if timeframe_name not in TIMEFRAME_MAP:
@@ -118,13 +120,13 @@ def main():
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
     out_csv = (
-        f"data/raw/{symbol[:6]}_bidask_{timeframe_name}_"
+        f"data/raw/{symbol}_bidask_{timeframe_name}_"
         f"{DATE_FROM:%Y%m%d}_{DATE_TO:%Y%m%d}.csv"
     )
 
     connect_mt5()
     try:
-        df = fetch_history_chunked(symbol, TIMEFRAME_MAP[timeframe_name], DATE_FROM, DATE_TO)
+        df = fetch_history_chunked(mt5_symbol, TIMEFRAME_MAP[timeframe_name], DATE_FROM, DATE_TO)
 
         if df.empty:
             print("No data returned.")

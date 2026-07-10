@@ -21,13 +21,14 @@ from src.signals.regime_signals import generate_regime_signals
 # -----------------------------
 # SETTINGS
 # -----------------------------
-CONFIG_FILE = "config/mt5_config_FXV.json"
+CONFIG_FILE = "config/mt5_config.json"
 
 
 # FXView
 MT5_FILES_DIR = Path(
+    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" #Laptop ICM
     #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop
-    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop
+    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop
 
 )
 
@@ -59,11 +60,18 @@ TIMEFRAME_MAP = {
 # -----------------------------
 # LOAD CONFIG
 # -----------------------------
+def resolve_mt5_symbol(symbol: str) -> str:
+    if Path(CONFIG_FILE).name == "mt5_config.json" and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    return symbol
+
+
 def load_config(symbol: str, timeframe: str):
     with open(CONFIG_FILE, "r") as f:
         config = json.load(f)
 
     config["symbol"] = symbol
+    config["mt5_symbol"] = resolve_mt5_symbol(symbol)
     config["timeframe"] = timeframe
     return config
 
@@ -91,7 +99,7 @@ def connect_mt5(config):
 # GET OHLC DATA
 # -----------------------------
 def get_mt5_ohlc(config):
-    symbol = config["symbol"]
+    symbol = config.get("mt5_symbol", config["symbol"])
     timeframe_name = config.get("timeframe", "M5")
     timeframe = TIMEFRAME_MAP[timeframe_name]
     bars = int(config.get("bars", 1000))

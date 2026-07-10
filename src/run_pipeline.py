@@ -11,16 +11,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-   #("src/data/download_history.py", "XAUUSD", "M5"),
-   #("src/features/build_features.py", "XAUUSD", "M5"),
-   ("src/labels/create_regime_labels.py", "XAUUSD", "M5", "2025-01-01", "2025-07-31 23:59"),
-   ("src/models/train_stage1_regime.py", "XAUUSD", "M5", "backtest", "2025-01-01", "2025-07-31 23:59"),
-   ("src/backtest/backtest.py", "XAUUSD", "M5", "2025-08-01", "2026-07-11 23:59", "--rebuild-features"),
+   #("src/data/download_history.py", "BTCUSD", "M5"),
+   #("src/features/build_features.py", "BTCUSD", "M5"),
+   ("src/labels/create_regime_labels.py", "BTCUSD", "M5", "2025-01-01", "2026-06-30 23:59"),
+   ("src/models/train_stage1_regime.py", "BTCUSD", "M5", "live", "2025-01-01", "2026-06-30 23:59"),
+   #("src/backtest/backtest.py", "BTCUSD", "M5", "2026-01-01", "2026-07-11 23:59", "--rebuild-features"),
 
-   #("src/backtest/backtest_line_by_line.py", "XAUUSD", "M5")
-   #("src/backtest/backtest.py", "XAUUSD", "M5", "2025-07-10", "2026-07-12 23:59")
+   #("src/backtest/backtest_line_by_line.py", "BTCUSD", "M5")
+   #("src/backtest/backtest.py", "BTCUSD", "M5", "2025-07-10", "2026-07-12 23:59")
     #("src/data/extract_ohlc_data.py"),
-    #("src/backtest/backtest_line_by_line.py","XAUUSD","M5")
+    #("src/backtest/backtest_line_by_line.py","BTCUSD","M5")
 
     # ("src/live/predict_live_regime.py",),  # Uncomment if needed
     # ("src/labels/create_trade_labels.py",),
