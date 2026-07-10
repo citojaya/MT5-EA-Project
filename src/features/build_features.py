@@ -9,36 +9,55 @@ DATE_FROM = "20250101"
 DATE_TO = "20261231"
 
 
+def safe_divide(numerator, denominator):
+    return numerator / denominator.where(denominator != 0)
+
+
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     df["time"] = pd.to_datetime(df["time"])
     df = df.sort_values("time")
+    close = df["close"]
 
-    df["ema_9"] = EMAIndicator(df["close"], window=9).ema_indicator()
-    df["ema_21"] = EMAIndicator(df["close"], window=21).ema_indicator()
-    df["ema_50"] = EMAIndicator(df["close"], window=50).ema_indicator()
-    df["ema_200"] = EMAIndicator(df["close"], window=200).ema_indicator()
+    df["ema_9"] = EMAIndicator(close, window=9).ema_indicator()
+    df["ema_21"] = EMAIndicator(close, window=21).ema_indicator()
+    df["ema_50"] = EMAIndicator(close, window=50).ema_indicator()
+    df["ema_200"] = EMAIndicator(close, window=200).ema_indicator()
 
-    df["rsi_14"] = RSIIndicator(df["close"], window=14).rsi()
+    df["rsi_14"] = RSIIndicator(close, window=14).rsi()
 
-    adx = ADXIndicator(df["high"], df["low"], df["close"], window=14)
+    adx = ADXIndicator(df["high"], df["low"], close, window=14)
     df["adx_14"] = adx.adx()
     df["di_plus"] = adx.adx_pos()
     df["di_minus"] = adx.adx_neg()
 
-    atr = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
+    atr = AverageTrueRange(df["high"], df["low"], close, window=14)
     df["atr_14"] = atr.average_true_range()
-    df["atr_pct"] = df["atr_14"] / df["close"]
+    df["atr_pct"] = safe_divide(df["atr_14"], close)
 
-    bb = BollingerBands(df["close"], window=20, window_dev=2)
+    bb = BollingerBands(close, window=20, window_dev=2)
     df["bb_width"] = (
         bb.bollinger_hband() - bb.bollinger_lband()
-    ) / df["close"]
+    ) / close.where(close != 0)
 
     df["body_size"] = abs(df["close"] - df["open"])
     df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
     df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
+    df["range_size"] = df["high"] - df["low"]
+
+    df["return_1"] = close.pct_change()
+    df["return_3"] = close.pct_change(3)
+    df["return_6"] = close.pct_change(6)
+    df["return_12"] = close.pct_change(12)
+
+    df["range_pct"] = safe_divide(df["range_size"], close)
+    df["body_pct"] = safe_divide(df["body_size"], close)
+    df["upper_wick_pct"] = safe_divide(df["upper_wick"], close)
+    df["lower_wick_pct"] = safe_divide(df["lower_wick"], close)
+    df["open_close_pct"] = safe_divide(df["close"] - df["open"], close)
+    df["high_close_pct"] = safe_divide(df["high"] - close, close)
+    df["low_close_pct"] = safe_divide(close - df["low"], close)
 
     df["hour"] = df["time"].dt.hour
     df["day_of_week"] = df["time"].dt.dayofweek
@@ -46,6 +65,28 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_9_slope"] = df["ema_9"].diff()
     df["ema_21_slope"] = df["ema_21"].diff()
     df["ema_50_slope"] = df["ema_50"].diff()
+
+    df["ema_9_dist_pct"] = safe_divide(close - df["ema_9"], close)
+    df["ema_21_dist_pct"] = safe_divide(close - df["ema_21"], close)
+    df["ema_50_dist_pct"] = safe_divide(close - df["ema_50"], close)
+    df["ema_200_dist_pct"] = safe_divide(close - df["ema_200"], close)
+    df["ema_9_slope_pct"] = safe_divide(df["ema_9_slope"], close)
+    df["ema_21_slope_pct"] = safe_divide(df["ema_21_slope"], close)
+    df["ema_50_slope_pct"] = safe_divide(df["ema_50_slope"], close)
+
+    if {"ask", "bid"}.issubset(df.columns):
+        spread_price = df["ask"] - df["bid"]
+    elif "ask" in df.columns:
+        spread_price = df["ask"] - close
+    else:
+        spread_price = pd.Series(0, index=df.index)
+
+    df["spread_pct"] = safe_divide(spread_price, close)
+    df["tick_volume_ma_20"] = df["tick_volume"].rolling(window=20).mean()
+    df["tick_volume_ratio_20"] = safe_divide(
+        df["tick_volume"],
+        df["tick_volume_ma_20"],
+    )
 
     df["atr_pct_rank"] = (
         df["atr_pct"]
