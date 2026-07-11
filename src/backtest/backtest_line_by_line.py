@@ -18,8 +18,7 @@ from src.signals.regime_signals import generate_regime_signals
 # -----------------------------
 # SETTINGS
 # -----------------------------
-INPUT_FILE = ROOT_DIR / "data/raw/ohlc_data_XAUUSD.csv"
-OUTPUT_FILE = ROOT_DIR / "data/backtest/backtest_line_by_line_XAUUSD.csv"
+DEFAULT_BARS = 1000
 
 SIGNAL_COLUMNS = [
     "time",
@@ -40,7 +39,7 @@ def load_config(symbol: str, timeframe: str):
     config = {
         "symbol": symbol,
         "timeframe": timeframe,
-        "bars": 1000,
+        "bars": DEFAULT_BARS,
     }
     return config
 
@@ -93,6 +92,16 @@ def resolve_project_path(path: Path) -> Path:
     return ROOT_DIR / path
 
 
+def print_progress(current: int, total: int, latest_time=None):
+    percent = (current / total) * 100 if total else 100
+    time_text = f" candle={latest_time}" if latest_time is not None else ""
+    print(
+        f"\rProgress: {current:,}/{total:,} ({percent:6.2f}%){time_text}",
+        end="",
+        flush=True,
+    )
+
+
 # -----------------------------
 # PREDICT REGIME
 # -----------------------------
@@ -138,8 +147,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M5")
-    parser.add_argument("--input-file", type=Path, default=INPUT_FILE)
-    parser.add_argument("--output-file", type=Path, default=OUTPUT_FILE)
+    parser.add_argument("--input-file", type=Path)
+    parser.add_argument("--output-file", type=Path)
     return parser.parse_args()
 
 
@@ -147,8 +156,12 @@ def main():
     args = parse_args()
     symbol = args.symbol
     timeframe = args.timeframe.upper()
-    input_file = resolve_project_path(args.input_file)
-    output_file = resolve_project_path(args.output_file)
+    input_file = resolve_project_path(
+        args.input_file or Path(f"data/raw/ohlc_data_{symbol}.csv")
+    )
+    output_file = resolve_project_path(
+        args.output_file or Path(f"data/backtest/backtest_line_by_line_{symbol}.csv")
+    )
 
     model_dir = ROOT_DIR / f"data/models/stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
@@ -168,7 +181,9 @@ def main():
     if len(data) < bars:
         raise RuntimeError(f"Input file has {len(data)} rows, but {bars} rows are required")
 
-    for row_index in range(bars - 1, len(data)):
+    total_rows = len(data) - bars + 1
+
+    for progress_index, row_index in enumerate(range(bars - 1, len(data)), start=1):
         try:
             latest_time, signal, _ = predict_regime(
                 config=config,
@@ -179,11 +194,14 @@ def main():
             )
 
             append_signal_line(signal, output_file)
+            print_progress(progress_index, total_rows, latest_time)
             #print(f"Appended signal for candle: {latest_time}")
 
         except Exception as e:
+            print()
             print(f"Error during prediction at row {row_index}: {e}")
 
+    print()
     print("Line-by-line backtest finished.")
 
 

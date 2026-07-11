@@ -1,11 +1,18 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix
 from xgboost import XGBClassifier
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.models.encoded_classifier import EncodedClassifier
 
 TARGET_COLUMN = "regime"
 EXCLUDED_COLUMNS = {"time", "regime", "regime_name"}
@@ -115,6 +122,14 @@ def chronological_split(
     return x_train, x_test, y_train, y_test
 
 
+def encode_labels(y: pd.Series) -> tuple[pd.Series, dict[int, int], dict[int, int]]:
+    real_labels = [int(label) for label in sorted(y.astype(int).unique())]
+    label_to_class = {label: class_id for class_id, label in enumerate(real_labels)}
+    class_to_label = {class_id: label for label, class_id in label_to_class.items()}
+    encoded = y.astype(int).map(label_to_class)
+    return encoded, label_to_class, class_to_label
+
+
 def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
     model = XGBClassifier(
         n_estimators=300,
@@ -132,7 +147,7 @@ def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
 
 
 def save_artifacts(
-    model: XGBClassifier,
+    model,
     feature_columns: list[str],
     model_file: Path,
     feature_columns_file: Path,
@@ -180,7 +195,8 @@ def main() -> None:
 
     model_data = df[feature_columns + [TARGET_COLUMN]].dropna()
     x = model_data[feature_columns]
-    y = model_data[TARGET_COLUMN].astype(int)
+    y_real = model_data[TARGET_COLUMN].astype(int)
+    y, label_to_class, class_to_label = encode_labels(y_real)
 
     x_train, x_test, y_train, y_test = chronological_split(x, y)
 
@@ -192,17 +208,22 @@ def main() -> None:
     print("Training stage 1 regime classifier without shuffling time series data...")
 
     model = train_model(x_train, y_train)
-    predictions = model.predict(x_test)
+    wrapped_model = EncodedClassifier(model, class_to_label)
+    predictions = wrapped_model.predict(x_test)
+    y_test_real = y_test.map(class_to_label)
 
-    labels = sorted(y.unique())
+    labels = sorted(set(y_test_real.unique()).union(set(predictions)))
+    print()
+    print("Real regime labels used:")
+    print(sorted(label_to_class))
     print()
     print("Classification report:")
-    print(classification_report(y_test, predictions, labels=labels, zero_division=0))
+    print(classification_report(y_test_real, predictions, labels=labels, zero_division=0))
 
     print("Confusion matrix:")
-    print(confusion_matrix(y_test, predictions, labels=labels))
+    print(confusion_matrix(y_test_real, predictions, labels=labels))
 
-    save_artifacts(model, feature_columns, model_file, feature_columns_file)
+    save_artifacts(wrapped_model, feature_columns, model_file, feature_columns_file)
     print()
     print(f"Saved model to: {model_file}")
     print(f"Saved feature columns to: {feature_columns_file}")
