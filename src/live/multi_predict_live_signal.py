@@ -23,17 +23,11 @@ from src.signals.regime_signals import generate_regime_signals
 # -----------------------------
 CONFIG_FILE = "config/mt5_config_ICM_DEMO.json"
 
-# FXView
+
 MT5_FILES_DIR = Path(
-    "C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" # HP Laptop ICM
-    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" #Laptop ICM
-
-    #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop FXView
-    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop FXView
-
+    Path.home() / "AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files"
+    #Path.home() / "AppData/Roaming/MetaQuotes/Terminal/Common/Files"
 )
-
-APPEND_SIGNAL_FILE = MT5_FILES_DIR / "append_signal.csv"
 
 SIGNAL_COLUMNS = [
     "time",
@@ -61,18 +55,18 @@ TIMEFRAME_MAP = {
 # -----------------------------
 # LOAD CONFIG
 # -----------------------------
-def resolve_mt5_symbol(symbol: str) -> str:
-    if Path(CONFIG_FILE).name == "mt5_config.json" and not symbol.endswith(".a"):
+def resolve_mt5_symbol(symbol: str, config_file: str) -> str:
+    if Path(config_file).name == "mt5_config.json" and not symbol.endswith(".a"):
         return f"{symbol}.a"
     return symbol
 
 
-def load_config(symbol: str, timeframe: str):
-    with open(CONFIG_FILE, "r") as f:
+def load_config(symbol: str, timeframe: str, config_file: str):
+    with open(config_file, "r", encoding="utf-8") as f:
         config = json.load(f)
 
     config["symbol"] = symbol
-    config["mt5_symbol"] = resolve_mt5_symbol(symbol)
+    config["mt5_symbol"] = resolve_mt5_symbol(symbol, config_file)
     config["timeframe"] = timeframe
     return config
 
@@ -108,21 +102,18 @@ def get_mt5_ohlc(config):
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Could not select symbol: {symbol}")
 
-    # Start at position 1 so inference only uses completed candles.
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 1, bars)
 
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No MT5 data received for {symbol}")
 
     df = pd.DataFrame(rates)
-
     df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
 
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
         raise RuntimeError(f"Symbol info not found: {symbol}")
 
-    # Match the historical downloader's per-candle bid/ask reconstruction.
     df["bid"] = df["close"]
     df["ask"] = df["close"] + df["spread"] * symbol_info.point
 
@@ -135,11 +126,33 @@ def get_mt5_ohlc(config):
 def load_model(model_file: Path, feature_columns_file: Path):
     model = joblib.load(model_file)
 
-    with open(feature_columns_file, "r") as f:
+    with open(feature_columns_file, "r", encoding="utf-8") as f:
         feature_columns = json.load(f)
 
-    print("Model loaded successfully.")
+    print(f"Model loaded successfully: {model_file}")
     return model, feature_columns
+
+
+def load_symbol_runtime(
+    symbol: str,
+    timeframe: str,
+    config_file: str,
+    mt5_files_dir: Path,
+) -> dict:
+    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
+    model, feature_columns = load_model(model_file, feature_columns_file)
+
+    return {
+        "symbol": symbol,
+        "config": load_config(symbol, timeframe, config_file),
+        "model": model,
+        "feature_columns": feature_columns,
+        "output_file": mt5_files_dir / f"latest_regime_{symbol}_{timeframe}.txt",
+        "append_signal_file": mt5_files_dir / f"append_signal_{symbol}_{timeframe}.csv",
+        "last_processed_time": None,
+    }
 
 
 # -----------------------------
@@ -151,7 +164,7 @@ def write_output_file(output_text: str, output_file: Path):
 
     temp_file = output_path.with_suffix(".tmp")
 
-    with open(temp_file, "w") as f:
+    with open(temp_file, "w", encoding="utf-8") as f:
         f.write(output_text)
 
     temp_file.replace(output_path)
@@ -242,65 +255,90 @@ def wait_until_next_minute():
     time.sleep(sleep_seconds + 0.2)
 
 
+def parse_symbols(symbols_text: str) -> list[str]:
+    symbols = [
+        symbol.strip().upper()
+        for symbol in symbols_text.split(",")
+        if symbol.strip()
+    ]
+    if not symbols:
+        raise ValueError("At least one symbol is required")
+    return symbols
+
+
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument(
+        "symbols",
+        type=str,
+        help="Comma-separated trading symbols, e.g. XAUUSD,BTCUSD,US30",
+    )
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
+    parser.add_argument(
+        "--config-file",
+        default=CONFIG_FILE,
+        help="MT5 config file used for login and symbol suffix behavior",
+    )
+    parser.add_argument(
+        "--mt5-files-dir",
+        type=Path,
+        default=MT5_FILES_DIR,
+        help="Directory where latest_regime and append_signal files are written",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    symbol = args.symbol
+    symbols = parse_symbols(args.symbols)
     timeframe = args.timeframe.upper()
+    mt5_files_dir = args.mt5_files_dir
 
     if timeframe not in TIMEFRAME_MAP:
         valid_timeframes = ", ".join(TIMEFRAME_MAP)
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
-    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
-    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
-    output_file = MT5_FILES_DIR / f"latest_regime_{symbol}_{timeframe}.txt"
-    append_signal_file = APPEND_SIGNAL_FILE
+    first_config = load_config(symbols[0], timeframe, args.config_file)
+    connect_mt5(first_config)
 
-    config = load_config(symbol, timeframe)
+    runtimes = [
+        load_symbol_runtime(symbol, timeframe, args.config_file, mt5_files_dir)
+        for symbol in symbols
+    ]
 
-    connect_mt5(config)
-
-    model, feature_columns = load_model(model_file, feature_columns_file)
-
-    print("Live regime prediction loop started.")
+    print("Multi-symbol live regime prediction loop started.")
+    print(f"Symbols: {', '.join(symbols)}")
+    print(f"Output directory: {mt5_files_dir}")
     print("Press CTRL + C to stop.")
-
-    last_processed_time = None
 
     try:
         while True:
-            try:
-                latest_time, signal, output = predict_live_regime(
-                    config=config,
-                    model=model,
-                    feature_columns=feature_columns,
-                )
+            for runtime in runtimes:
+                symbol = runtime["symbol"]
+                try:
+                    latest_time, signal, output = predict_live_regime(
+                        config=runtime["config"],
+                        model=runtime["model"],
+                        feature_columns=runtime["feature_columns"],
+                    )
 
-                if latest_time == last_processed_time:
-                    print(f"No new candle. Last candle time: {latest_time}")
-                else:
-                    last_processed_time = latest_time
-                    write_output_file(output, output_file)
-                    print(f"Saved prediction to: {output_file}")
-
-                    if append_signal_line(signal, append_signal_file):
-                        print(f"Appended signal to: {append_signal_file}")
+                    if latest_time == runtime["last_processed_time"]:
+                        print(f"{symbol}: No new candle. Last candle time: {latest_time}")
                     else:
-                        print(f"Signal already logged in: {append_signal_file}")
+                        runtime["last_processed_time"] = latest_time
+                        write_output_file(output, runtime["output_file"])
+                        print(f"{symbol}: Saved prediction to: {runtime['output_file']}")
 
-            except Exception as e:
-                print(f"Error during prediction: {e}")
+                        if append_signal_line(signal, runtime["append_signal_file"]):
+                            print(f"{symbol}: Appended signal to: {runtime['append_signal_file']}")
+                        else:
+                            print(f"{symbol}: Signal already logged in: {runtime['append_signal_file']}")
+
+                except Exception as e:
+                    print(f"{symbol}: Error during prediction: {e}")
 
             wait_until_next_minute()
 
