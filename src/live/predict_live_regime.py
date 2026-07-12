@@ -23,12 +23,13 @@ from src.signals.regime_signals import generate_regime_signals
 # -----------------------------
 CONFIG_FILE = "config/mt5_config.json"
 
-
 # FXView
 MT5_FILES_DIR = Path(
-    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" #Laptop ICM
-    #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop
-    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop
+    "C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" # HP Laptop ICM
+    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" #Laptop ICM
+
+    #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop FXView
+    #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/D544178D1D00BA11487CDDEC42EEF772/MQL5/Files" # Laptop FXView
 
 )
 
