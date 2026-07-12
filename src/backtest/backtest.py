@@ -11,7 +11,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.signals.regime_signals import generate_regime_signals
-from src.features.build_features import DATE_FROM, DATE_TO, build_features
+from src.data.history_paths import find_existing_history_file, raw_dir_for_config
+from src.features.build_features import build_features
 
 
 HISTORY_BARS = 1000
@@ -109,6 +110,11 @@ def parse_args():
         action="store_true",
         help="Rebuild and cache features from the raw OHLC CSV before backtesting",
     )
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the raw history subdirectory.",
+    )
     return parser.parse_args()
 
 
@@ -118,9 +124,6 @@ def main():
     timeframe = args.timeframe.upper()
 
     input_file = Path(f"data/features/{symbol}_{timeframe}_features.csv")
-    raw_file = Path(
-        f"data/raw/{symbol}_bidask_{timeframe}_{DATE_FROM}_{DATE_TO}.csv"
-    )
     model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
     model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
@@ -131,6 +134,14 @@ def main():
     )
 
     if args.rebuild_features:
+        raw_file = find_existing_history_file(
+            [raw_dir_for_config(args.config_file), Path("data/raw")],
+            symbol,
+            timeframe,
+        )
+        if raw_file is None:
+            raise RuntimeError(f"No raw history file found for {symbol} {timeframe}")
+
         raw_data = pd.read_csv(raw_file)
         raw_data = select_raw_history(raw_data, args.start, args.end)
         if raw_data.empty:
