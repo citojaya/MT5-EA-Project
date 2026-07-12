@@ -11,7 +11,7 @@
 #include <Trade/Trade.mqh>
 
 //--- Inputs ----------------------------------------------------------
-input string           InpFileName        = "XAUUSD_M5_backtest_signals.csv"; // File name
+input string           InpFileName        = "US30_M5_backtest_signals.csv"; // File name
 input bool             InpUseCommonFolder = true;               // Read from Common Files (MQL5\..\Common\Files)
 input bool             InpUseTimer        = false;               // Process signals on timer instead of ticks
 input int              InpRefreshSeconds  = 5;                   // Refresh interval (seconds)
@@ -23,11 +23,13 @@ input int              InpFontSize        = 10;                  // Font size
 input string           InpFontName        = "Consolas";           // Font name
 input int              InpStaleMinutes    = 15;                  // Minutes before data flagged stale
 input bool             InpEnableTrading   = true;                // Enable trading from signal
-input double           InpLots            = 0.01;                // Fixed position size
+input double           InpLots            = 0.1;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
-input double           InpTakeProfitAtr   = 3.0;                 // Take profit in ATR multiples
-input double           InpStopLossAtr     = 2.0;                 // Stop loss in ATR multiples
-input double           InpBreakEvenAtAtr  = 1.5;                 // Move SL after profit reaches ATR multiple
+input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
+input double           InpStopLossAtr     = 12.0;                 // Stop loss in ATR multiples
+input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
+input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
+input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
 input double           InpBreakEvenPlusAtr= 0.2;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
 
@@ -141,24 +143,6 @@ int SplitSignalLine(string line, string &fields[])
   }
 
 //+------------------------------------------------------------------+
-//| Load selected row into key/value panel fields                     |
-//+------------------------------------------------------------------+
-void ProcessSignalFields(string &fields[])
-  {
-   if(ArraySize(fields) < 8)
-      return;
-
-   SetKeyValue("time",        fields[0]);
-   SetKeyValue("symbol",      fields[1]);
-   SetKeyValue("timeframe",   fields[2]);
-   SetKeyValue("close",       fields[3]);
-   SetKeyValue("regime",      fields[4]);
-   SetKeyValue("regime_name", fields[5]);
-   SetKeyValue("confidence",  fields[6]);
-   SetKeyValue("updated_utc", fields[7]);
-  }
-
-//+------------------------------------------------------------------+
 //| Store one CSV signal row in memory                                |
 //+------------------------------------------------------------------+
 void AppendSignalRow(string &fields[])
@@ -194,13 +178,6 @@ void AppendSignalRow(string &fields[])
 //+------------------------------------------------------------------+
 bool LoadSignalCsv(string filename, bool commonFolder)
   {
-   g_count = 0;
-   for(int kvIndex = 0; kvIndex < MAX_KV; kvIndex++)
-     {
-      g_keys[kvIndex] = "";
-      g_vals[kvIndex] = "";
-     }
-
    int flags = FILE_READ | FILE_TXT | FILE_ANSI;
    if(commonFolder)
       flags |= FILE_COMMON;
@@ -211,16 +188,6 @@ bool LoadSignalCsv(string filename, bool commonFolder)
       g_lastErr = "Cannot open file: " + filename + "  (error " + IntegerToString(GetLastError()) + ")";
       return false;
      }
-
-   ArrayResize(g_signalTimes, 0);
-   ArrayResize(g_signalTimeText, 0);
-   ArrayResize(g_signalSymbols, 0);
-   ArrayResize(g_signalTimeframes, 0);
-   ArrayResize(g_signalClose, 0);
-   ArrayResize(g_signalRegimes, 0);
-   ArrayResize(g_signalRegimeNames, 0);
-   ArrayResize(g_signalConfidence, 0);
-   ArrayResize(g_signalUpdatedUtc, 0);
 
    while(!FileIsEnding(handle))
      {
@@ -422,6 +389,24 @@ bool HasManagedPosition()
   }
 
 //+------------------------------------------------------------------+
+//| Close this EA's open position on the chart symbol                 |
+//+------------------------------------------------------------------+
+void CloseManagedPosition(string reason)
+  {
+   if(!PositionSelect(_Symbol))
+      return;
+
+   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+   if(magic != InpMagicNumber)
+      return;
+
+   if(!g_trade.PositionClose(_Symbol))
+      Print("Failed to close position: ", reason, ". Retcode: ", g_trade.ResultRetcodeDescription());
+   else
+      Print("Closed position: ", reason);
+  }
+
+//+------------------------------------------------------------------+
 //| Place buy/sell based on the regime signal                         |
 //+------------------------------------------------------------------+
 void ProcessTradingSignal()
@@ -432,6 +417,7 @@ void ProcessTradingSignal()
    string signalSymbol = GetVal("symbol", "");
    string timeframe    = GetVal("timeframe", "");
    string regimeName   = GetVal("regime_name", "");
+   string confidenceStr= GetVal("confidence", "");
    string signalTime   = GetVal("time", "");
 
    if(signalSymbol != _Symbol)
@@ -440,19 +426,35 @@ void ProcessTradingSignal()
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
       return;
 
+   string regimeLower = regimeName;
+   StringToLower(regimeLower);
+
+   if(StringFind(regimeLower, "transition") >= 0)
+     {
+      CloseManagedPosition("Transition regime");
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
    ManageBreakEven();
 
    if(HasManagedPosition())
       return;
-
-   string regimeLower = regimeName;
-   StringToLower(regimeLower);
 
    bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
    bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
 
    if(!buySignal && !sellSignal)
       return;
+
+   double confidence = StringToDouble(confidenceStr);
+   if(confidence < InpMinTradeConfidence)
+     {
+      Print("Trade skipped. Confidence ", confidence, " is below minimum ", InpMinTradeConfidence,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
 
    ENUM_TIMEFRAMES atrTimeframe = TimeframeFromString(timeframe);
    double atr = GetAtrValue(atrTimeframe);
@@ -494,7 +496,7 @@ void ProcessTradingSignal()
 //+------------------------------------------------------------------+
 void ManageBreakEven()
   {
-   if(!InpEnableTrading)
+   if(!InpEnableTrading || !InpEnableBreakEven)
       return;
 
    if(!PositionSelect(_Symbol))
@@ -625,7 +627,6 @@ void DrawPanel()
    double conf   = StringToDouble(confStr) * 100.0;
    color  regCol = RegimeColor(regimeName);
 
-   // --- Freshness of the underlying data ---
    datetime updDt  = ParseUtcDateTime(updUtc);
    datetime nowUtc = TimeGMT();
    color freshCol  = clrLimeGreen;
