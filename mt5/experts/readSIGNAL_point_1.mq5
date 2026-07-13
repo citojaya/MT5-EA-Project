@@ -313,11 +313,6 @@ void ProcessTradingSignal()
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
       return;
 
-   ManageBreakEven();
-
-   if(HasManagedPosition())
-      return;
-
    string regimeLower = regimeName;
    StringToLower(regimeLower);
 
@@ -327,6 +322,11 @@ void ProcessTradingSignal()
       g_lastTradeSignalTime = signalTime;
       return;
      }
+
+   ManageBreakEven();
+
+   if(HasManagedPosition())
+      return;
 
    bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
    bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
