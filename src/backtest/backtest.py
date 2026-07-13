@@ -12,7 +12,6 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.signals.regime_signals import generate_regime_signals
 from src.data.history_paths import (
-    backtest_dir_for_config,
     features_dir_for_config,
     find_existing_history_file,
     models_dir_for_config,
@@ -22,6 +21,17 @@ from src.features.build_features import build_features
 
 
 HISTORY_BARS = 1000
+MT5_COMMON_FILES_DIR = Path.home() / "AppData/Roaming/MetaQuotes/Terminal/Common/Files"
+
+
+def output_symbol_for_config(symbol: str, config_file: str) -> str:
+    config_name = Path(config_file).stem
+    if (
+        config_name.startswith("config_mt5_ICM")
+        or config_name.startswith("mt5_config_ICM")
+    ) and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    return symbol
 
 
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -109,7 +119,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        help="Optional output CSV path. Defaults to data/backtest/{broker}/{symbol}_{timeframe}_backtest_signals.csv",
+        help="Optional output CSV path. Defaults to MT5 Common Files/{symbol}_{timeframe}_backtest_signals.csv",
     )
     parser.add_argument(
         "--rebuild-features",
@@ -127,6 +137,7 @@ def parse_args():
 def main():
     args = parse_args()
     symbol = args.symbol
+    output_symbol = output_symbol_for_config(symbol, args.config_file)
     timeframe = args.timeframe.upper()
 
     input_file = features_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_features.csv"
@@ -136,7 +147,7 @@ def main():
     output_file = (
         Path(args.output)
         if args.output
-        else backtest_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_backtest_signals.csv"
+        else MT5_COMMON_FILES_DIR / f"{symbol}_{timeframe}_backtest_signals.csv"
     )
 
     if args.rebuild_features:
@@ -172,7 +183,7 @@ def main():
         features=features,
         model=model,
         feature_columns=feature_columns,
-        symbol=symbol,
+        symbol=output_symbol,
         timeframe=timeframe,
     )
 

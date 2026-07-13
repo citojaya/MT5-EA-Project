@@ -21,6 +21,8 @@ input int              InpFontSize        = 10;                  // Font size
 input string           InpFontName        = "Consolas";           // Font name
 input int              InpStaleMinutes    = 15;                  // Minutes before data flagged stale
 input bool             InpEnableTrading   = true;                // Enable trading from signal
+input string           InpTradeStartTime  = "01:30";             // Earliest time to open trades
+input string           InpTradeEndTime    = "22:00";             // Latest time to open trades
 input double           InpLots            = 0.1;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
@@ -239,6 +241,43 @@ ENUM_TIMEFRAMES TimeframeFromString(string timeframeName)
   }
 
 //+------------------------------------------------------------------+
+//| Convert HH:MM time text to minutes from midnight                  |
+//+------------------------------------------------------------------+
+int TimeTextToMinutes(string timeText)
+  {
+   if(StringLen(timeText) < 5)
+      return -1;
+
+   int hour = (int)StringToInteger(StringSubstr(timeText, 0, 2));
+   int minute = (int)StringToInteger(StringSubstr(timeText, 3, 2));
+
+   if(hour < 0 || hour > 23 || minute < 0 || minute > 59)
+      return -1;
+
+   return hour * 60 + minute;
+  }
+
+//+------------------------------------------------------------------+
+//| Check whether new trades are allowed at the current server time   |
+//+------------------------------------------------------------------+
+bool IsWithinTradeTime()
+  {
+   int startMinute = TimeTextToMinutes(InpTradeStartTime);
+   int endMinute = TimeTextToMinutes(InpTradeEndTime);
+   if(startMinute < 0 || endMinute < 0)
+      return true;
+
+   MqlDateTime now;
+   TimeToStruct(TimeCurrent(), now);
+   int currentMinute = now.hour * 60 + now.min;
+
+   if(startMinute <= endMinute)
+      return currentMinute >= startMinute && currentMinute <= endMinute;
+
+   return currentMinute >= startMinute || currentMinute <= endMinute;
+  }
+
+//+------------------------------------------------------------------+
 //| Get latest ATR value                                              |
 //+------------------------------------------------------------------+
 double GetAtrValue(ENUM_TIMEFRAMES timeframe)
@@ -363,6 +402,14 @@ void ProcessTradingSignal()
 
    if(!buySignal && !sellSignal)
       return;
+
+   if(!IsWithinTradeTime())
+     {
+      Print("Trade skipped outside allowed time window ", InpTradeStartTime, "-", InpTradeEndTime,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
 
    double confidence = StringToDouble(confidenceStr);
    if(confidence < InpMinTradeConfidence)

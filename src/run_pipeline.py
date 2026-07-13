@@ -7,14 +7,14 @@ from pathlib import Path
 # -------------------------------------------------
 # MT5 ML Pipeline
 # -------------------------------------------------
-symbol = "US30"
+symbol = "GBPUSD"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
    ("src/data/download_history.py", symbol, "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
    ("src/features/build_features.py", symbol, "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
-   ("src/labels/create_regime_labels.py", symbol, "M5", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
+    ("src/labels/create_regime_labels.py", symbol, "M5", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
    ("src/models/train_stage1_regime.py", symbol, "M5", "live", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
    ("src/backtest/backtest.py", symbol, "M5", "2026-01-01", "2026-07-15 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
 
