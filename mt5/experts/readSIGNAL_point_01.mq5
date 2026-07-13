@@ -11,7 +11,7 @@
 #include <Trade/Trade.mqh>
 
 //--- Inputs ----------------------------------------------------------
-input string           InpFileName        = "latest_regime_XAUUSD_M1.txt"; // File name
+input string           InpFileName        = "latest_regime_*.txt"; // File name
 input bool             InpUseCommonFolder = false;                // Read from Common Files (MQL5\..\Common\Files)
 input int              InpRefreshSeconds  = 5;                   // Refresh interval (seconds)
 input ENUM_BASE_CORNER InpCorner          = CORNER_LEFT_UPPER;   // Panel corner
@@ -23,9 +23,9 @@ input int              InpStaleMinutes    = 15;                  // Minutes befo
 input bool             InpEnableTrading   = true;                // Enable trading from signal
 input double           InpLots            = 0.01;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
-input double           InpTakeProfitAtr   = 3.0;                 // Take profit in ATR multiples
-input double           InpStopLossAtr     = 2.0;                 // Stop loss in ATR multiples
-input double           InpBreakEvenAtAtr  = 1.5;                 // Move SL after profit reaches ATR multiple
+input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
+input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
+input double           InpBreakEvenAtAtr  = 2.5;                 // Move SL after profit reaches ATR multiple
 input double           InpBreakEvenPlusAtr= 0.2;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
 
