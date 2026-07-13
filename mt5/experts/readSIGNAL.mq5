@@ -42,6 +42,44 @@ CTrade g_trade;
 string g_lastTradeSignalTime = "";
 
 //+------------------------------------------------------------------+
+//| Convert chart symbol to signal-file symbol                        |
+//+------------------------------------------------------------------+
+string ChartSignalSymbol()
+  {
+   string symbol = _Symbol;
+   int suffixPos = StringFind(symbol, ".a");
+   if(suffixPos >= 0)
+      symbol = StringSubstr(symbol, 0, suffixPos);
+   return symbol;
+  }
+
+//+------------------------------------------------------------------+
+//| Convert chart timeframe to signal-file timeframe text             |
+//+------------------------------------------------------------------+
+string ChartTimeframeString()
+  {
+   ENUM_TIMEFRAMES period = (ENUM_TIMEFRAMES)_Period;
+
+   if(period == PERIOD_M1)  return "M1";
+   if(period == PERIOD_M5)  return "M5";
+   if(period == PERIOD_M15) return "M15";
+   if(period == PERIOD_M30) return "M30";
+   if(period == PERIOD_H1)  return "H1";
+   if(period == PERIOD_H4)  return "H4";
+   if(period == PERIOD_D1)  return "D1";
+
+   return EnumToString(period);
+  }
+
+//+------------------------------------------------------------------+
+//| Build the live signal file name from the chart symbol/timeframe   |
+//+------------------------------------------------------------------+
+string ChartSignalFileName()
+  {
+   return "latest_regime_" + ChartSignalSymbol() + "_" + ChartTimeframeString() + ".txt";
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagicNumber);
@@ -75,7 +113,8 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void ReadAndDisplay()
   {
-   g_fileOk = ReadKeyValueFile(InpFileName, InpUseCommonFolder);
+   string filename = ChartSignalFileName();
+   g_fileOk = ReadKeyValueFile(filename, InpUseCommonFolder);
    DrawPanel();
    ProcessTradingSignal();
    ChartRedraw();
@@ -247,7 +286,7 @@ void ProcessTradingSignal()
    string regimeName   = GetVal("regime_name", "");
    string signalTime   = GetVal("time", "");
 
-   if(signalSymbol != _Symbol)
+   if(signalSymbol != ChartSignalSymbol())
       return;
 
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
