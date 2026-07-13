@@ -7,24 +7,23 @@ from pathlib import Path
 # -------------------------------------------------
 # MT5 ML Pipeline
 # -------------------------------------------------
+symbol = "US30"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-   ("src/data/download_history.py", "XAUUSD", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
-   ("src/features/build_features.py", "XAUUSD", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
-   ("src/labels/create_regime_labels.py", "XAUUSD", "M5", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin trainin date range
-   ("src/models/train_stage1_regime.py", "XAUUSD", "M5", "backtest", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
-   ("src/backtest/backtest.py", "XAUUSD", "M5", "2026-07-10", "2026-07-12 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
+   ("src/data/download_history.py", symbol, "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
+   ("src/features/build_features.py", symbol, "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
+   ("src/labels/create_regime_labels.py", symbol, "M5", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
+   ("src/models/train_stage1_regime.py", symbol, "M5", "live", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
+   ("src/backtest/backtest.py", symbol, "M5", "2026-01-01", "2026-07-15 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
 
-   #("src/backtest/backtest_line_by_line.py", "XAUUSD", "M5", "--config-file", "config/mt5_config_ICM_DEMO.json")
-   #("src/backtest/backtest.py", "XAUUSD", "M5", "2025-07-10", "2026-07-12 23:59")
-    #("src/data/extract_ohlc_data.py"),
-    #("src/backtest/backtest_line_by_line.py","XAUUSD","M5", "--config-file", "config/mt5_config_ICM_DEMO.json")
 
-    # ("src/live/predict_live_regime.py",),  # Uncomment if needed
-    # ("src/labels/create_trade_labels.py",),
-    # ("src/models/train_stage2_trade.py",),
+    #("src/data/extract_ohlc_data.py" ,symbol ,"M5"),
+    #("src/backtest/backtest_line_by_line.py", symbol, "M5", "--config-file", "config/mt5_config_ICM_DEMO.json")
+    #("src/visualization/compare_signal_regime_confidence.py",
+    #    "data/backtest/ICMarketsAU-Demo/US30_M5_backtest_signals.csv",
+    #    "data/backtest/ICMarketsAU-Demo/backtest_line_by_line_US30.csv")
 ]
 
 

@@ -131,8 +131,8 @@ def main():
 
     input_file = features_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_features.csv"
     model_dir = models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
-    model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
+    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
     output_file = (
         Path(args.output)
         if args.output
