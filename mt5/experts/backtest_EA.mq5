@@ -27,6 +27,7 @@ input double           InpLots            = 0.1;                // Fixed positio
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 12.0;                 // Stop loss in ATR multiples
+input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
 input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
 input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
@@ -89,6 +90,7 @@ void OnTick()
       ReadAndDisplay();
 
    ManageBreakEven();
+   ManageCandleExit();
   }
 
 //+------------------------------------------------------------------+
@@ -404,6 +406,34 @@ void CloseManagedPosition(string reason)
       Print("Failed to close position: ", reason, ". Retcode: ", g_trade.ResultRetcodeDescription());
    else
       Print("Closed position: ", reason);
+  }
+
+//+------------------------------------------------------------------+
+//| Close this EA's position after the configured candle count        |
+//+------------------------------------------------------------------+
+void ManageCandleExit()
+  {
+   if(!InpEnableTrading || InpCloseAfterBars <= 0)
+      return;
+
+   if(!PositionSelect(_Symbol))
+      return;
+
+   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+   if(magic != InpMagicNumber)
+      return;
+
+   string timeframe = GetVal("timeframe", "");
+   ENUM_TIMEFRAMES exitTimeframe = TimeframeFromString(timeframe);
+   datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+   int barsSinceOpen = iBarShift(_Symbol, exitTimeframe, openTime, false);
+
+   if(barsSinceOpen < InpCloseAfterBars)
+      return;
+
+   CloseManagedPosition(
+      "Time exit after " + IntegerToString(InpCloseAfterBars) + " candles"
+   );
   }
 
 //+------------------------------------------------------------------+

@@ -25,6 +25,7 @@ input double           InpLots            = 0.1;                // Fixed positio
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
+input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
 input double           InpBreakEvenAtAtr  = 2.5;                 // Move SL after profit reaches ATR multiple
 input double           InpBreakEvenPlusAtr= 0.2;                 // Break-even offset in ATR multiples
@@ -101,6 +102,7 @@ void OnDeinit(const int reason)
 void OnTick()
   {
    ManageBreakEven();
+   ManageCandleExit();
   }
 
 //+------------------------------------------------------------------+
@@ -291,6 +293,34 @@ void CloseManagedPosition(string reason)
    else
       Print("Failed to close managed position. Reason: ", reason,
             ". Retcode: ", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
+  }
+
+//+------------------------------------------------------------------+
+//| Close this EA's position after the configured candle count        |
+//+------------------------------------------------------------------+
+void ManageCandleExit()
+  {
+   if(!InpEnableTrading || InpCloseAfterBars <= 0)
+      return;
+
+   if(!PositionSelect(_Symbol))
+      return;
+
+   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+   if(magic != InpMagicNumber)
+      return;
+
+   string timeframe = GetVal("timeframe", "");
+   ENUM_TIMEFRAMES exitTimeframe = TimeframeFromString(timeframe);
+   datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+   int barsSinceOpen = iBarShift(_Symbol, exitTimeframe, openTime, false);
+
+   if(barsSinceOpen < InpCloseAfterBars)
+      return;
+
+   CloseManagedPosition(
+      "Time exit after " + IntegerToString(InpCloseAfterBars) + " candles"
+   );
   }
 
 //+------------------------------------------------------------------+
