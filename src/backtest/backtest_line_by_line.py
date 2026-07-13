@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.features.build_features import build_features
+from src.data.history_paths import backtest_dir_for_config, models_dir_for_config
 from src.signals.regime_signals import generate_regime_signals
 
 
@@ -149,6 +150,11 @@ def parse_args():
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M5")
     parser.add_argument("--input-file", type=Path)
     parser.add_argument("--output-file", type=Path)
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
     return parser.parse_args()
 
 
@@ -160,10 +166,11 @@ def main():
         args.input_file or Path(f"data/raw/ohlc_data_{symbol}.csv")
     )
     output_file = resolve_project_path(
-        args.output_file or Path(f"data/backtest/backtest_line_by_line_{symbol}.csv")
+        args.output_file
+        or backtest_dir_for_config(args.config_file) / f"backtest_line_by_line_{symbol}.csv"
     )
 
-    model_dir = ROOT_DIR / f"data/models/stage1_regime_{symbol}_{timeframe}"
+    model_dir = ROOT_DIR / models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
 

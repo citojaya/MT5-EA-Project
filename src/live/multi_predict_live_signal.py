@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.features.build_features import build_features
+from src.data.history_paths import models_dir_for_config
 from src.signals.regime_signals import generate_regime_signals
 
 
@@ -139,7 +140,7 @@ def load_symbol_runtime(
     config_file: str,
     mt5_files_dir: Path,
 ) -> dict:
-    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    model_dir = models_dir_for_config(config_file) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
     model, feature_columns = load_model(model_file, feature_columns_file)

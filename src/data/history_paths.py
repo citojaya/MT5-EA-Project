@@ -5,6 +5,10 @@ from pathlib import Path
 
 
 RAW_DIR = Path("data/raw")
+FEATURES_DIR = Path("data/features")
+LABELS_DIR = Path("data/labels")
+MODELS_DIR = Path("data/models")
+BACKTEST_DIR = Path("data/backtest")
 
 
 def sanitize_directory_name(value: str) -> str:
@@ -36,6 +40,36 @@ def raw_dir_for_config(
         return base_dir
 
     return base_dir / broker_name_from_config(cfg, config_file or "")
+
+
+def data_dir_for_config(
+    base_dir: Path,
+    config_file: str | Path | None = None,
+    cfg: dict | None = None,
+) -> Path:
+    if cfg is None and config_file is not None and Path(config_file).exists():
+        cfg = load_config(config_file)
+
+    if cfg is None:
+        return base_dir
+
+    return base_dir / broker_name_from_config(cfg, config_file or "")
+
+
+def features_dir_for_config(config_file: str | Path | None = None, cfg: dict | None = None) -> Path:
+    return data_dir_for_config(FEATURES_DIR, config_file, cfg)
+
+
+def labels_dir_for_config(config_file: str | Path | None = None, cfg: dict | None = None) -> Path:
+    return data_dir_for_config(LABELS_DIR, config_file, cfg)
+
+
+def models_dir_for_config(config_file: str | Path | None = None, cfg: dict | None = None) -> Path:
+    return data_dir_for_config(MODELS_DIR, config_file, cfg)
+
+
+def backtest_dir_for_config(config_file: str | Path | None = None, cfg: dict | None = None) -> Path:
+    return data_dir_for_config(BACKTEST_DIR, config_file, cfg)
 
 
 def raw_history_filename(

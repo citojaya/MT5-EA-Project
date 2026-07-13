@@ -1,15 +1,22 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import joblib
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
-def load_feature_importance(symbol: str, timeframe: str) -> pd.DataFrame:
-    model_dir = Path(f"models/stage1_regime_{symbol}_{timeframe}")
-    model_file = model_dir / f"regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
+from src.data.history_paths import models_dir_for_config
+
+
+def load_feature_importance(symbol: str, timeframe: str, mode: str, config_file: str) -> pd.DataFrame:
+    model_dir = models_dir_for_config(config_file) / f"stage1_regime_{symbol}_{timeframe}"
+    model_file = model_dir / f"{mode}_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"{mode}_feature_columns_{symbol}_{timeframe}.json"
 
     if not model_file.exists():
         raise FileNotFoundError(f"Model file not found: {model_file}")
@@ -50,9 +57,20 @@ def parse_args():
     parser.add_argument("symbol", type=str, help="Trading symbol, e.g. XAUUSD")
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
     parser.add_argument(
+        "--mode",
+        choices=["backtest", "live"],
+        default="live",
+        help="Artifact prefix to inspect",
+    )
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
+    parser.add_argument(
         "--output",
         type=str,
-        help="Optional CSV output path. Defaults to models/stage1_regime_{symbol}_{timeframe}/feature_importance_{symbol}_{timeframe}.csv",
+        help="Optional CSV output path. Defaults to data/models/{broker}/stage1_regime_{symbol}_{timeframe}/feature_importance_{mode}_{symbol}_{timeframe}.csv",
     )
     return parser.parse_args()
 
@@ -61,16 +79,16 @@ def main():
     args = parse_args()
     symbol = args.symbol
     timeframe = args.timeframe.upper()
+    mode = args.mode.lower()
 
-    importance = load_feature_importance(symbol, timeframe)
+    importance = load_feature_importance(symbol, timeframe, mode, args.config_file)
 
     output_file = (
         Path(args.output)
         if args.output
-        else Path(
-            f"models/stage1_regime_{symbol}_{timeframe}/"
-            f"feature_importance_{symbol}_{timeframe}.csv"
-        )
+        else models_dir_for_config(args.config_file)
+        / f"stage1_regime_{symbol}_{timeframe}"
+        / f"feature_importance_{mode}_{symbol}_{timeframe}.csv"
     )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)

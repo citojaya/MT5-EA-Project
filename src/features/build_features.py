@@ -11,7 +11,11 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from src.data.history_paths import raw_dir_for_config, raw_history_path
+from src.data.history_paths import (
+    features_dir_for_config,
+    raw_dir_for_config,
+    raw_history_path,
+)
 
 
 def parse_date_token(value: str) -> str:
@@ -136,8 +140,9 @@ def main():
     date_to = parse_date_token(args.end_date)
 
     raw_dir = raw_dir_for_config(args.config_file)
+    features_dir = features_dir_for_config(args.config_file)
     input_file = raw_history_path(raw_dir, symbol, timeframe, date_from, date_to)
-    output_file = Path(f"data/features/{symbol}_{timeframe}_features.csv")
+    output_file = features_dir / f"{symbol}_{timeframe}_features.csv"
 
     df = pd.read_csv(input_file)
     features = build_features(df)

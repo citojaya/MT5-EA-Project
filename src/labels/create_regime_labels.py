@@ -1,7 +1,14 @@
 import argparse
 from pathlib import Path
+import sys
 
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.data.history_paths import features_dir_for_config, labels_dir_for_config
 
 
 REGIME_MAP = {
@@ -115,6 +122,11 @@ def parse_args():
     parser.add_argument("timeframe", type=str, help="Timeframe, e.g. M1 or M5")
     parser.add_argument("start", nargs="?", help="Optional start datetime, e.g. 2025-01-01")
     parser.add_argument("end", nargs="?", help="Optional end datetime, e.g. 2025-06-30 23:59")
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
     return parser.parse_args()
 
 
@@ -123,8 +135,8 @@ def main():
     symbol = args.symbol
     timeframe = args.timeframe.upper()
 
-    input_file = f"data/features/{symbol}_{timeframe}_features.csv"
-    output_file = Path(f"data/labels/{symbol}_{timeframe}_regime_labels.csv")
+    input_file = features_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_features.csv"
+    output_file = labels_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_regime_labels.csv"
 
     df = pd.read_csv(input_file)
 

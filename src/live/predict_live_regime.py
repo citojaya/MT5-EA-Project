@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.features.build_features import build_features
+from src.data.history_paths import models_dir_for_config
 from src.signals.regime_signals import generate_regime_signals
 
 
@@ -261,7 +262,7 @@ def main():
         valid_timeframes = ", ".join(TIMEFRAME_MAP)
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
-    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    model_dir = models_dir_for_config(CONFIG_FILE) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
     output_file = MT5_FILES_DIR / f"latest_regime_{symbol}_{timeframe}.txt"

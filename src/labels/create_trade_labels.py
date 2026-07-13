@@ -1,11 +1,18 @@
+import argparse
+from pathlib import Path
+import sys
+
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.data.history_paths import labels_dir_for_config
 
 
 SYMBOL = "BTCUSD"
 TIMEFRAME = "M5"
-
-INPUT_FILE = f"data/labels/{SYMBOL}_{TIMEFRAME}_regime_labels.csv"
-OUTPUT_FILE = f"data/labels/{SYMBOL}_{TIMEFRAME}_trade_labels.csv"
 
 HORIZON_BARS = 12
 TAKE_PROFIT_PCT = 0.002
@@ -81,13 +88,33 @@ def first_hit_index(hit_series: pd.Series) -> int | None:
     return int(hit_positions[0])
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("symbol", nargs="?", default=SYMBOL, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument("timeframe", nargs="?", default=TIMEFRAME, help="Timeframe, e.g. M5")
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    df = pd.read_csv(INPUT_FILE)
+    args = parse_args()
+    symbol = args.symbol
+    timeframe = args.timeframe.upper()
+    labels_dir = labels_dir_for_config(args.config_file)
+    input_file = labels_dir / f"{symbol}_{timeframe}_regime_labels.csv"
+    output_file = labels_dir / f"{symbol}_{timeframe}_trade_labels.csv"
+
+    df = pd.read_csv(input_file)
 
     labelled = create_trade_labels(df)
-    labelled.to_csv(OUTPUT_FILE, index=False)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    labelled.to_csv(output_file, index=False)
 
-    print(f"Saved trade labels to: {OUTPUT_FILE}")
+    print(f"Saved trade labels to: {output_file}")
     print()
     print("Trade label distribution:")
     print(labelled["trade_label_name"].value_counts())

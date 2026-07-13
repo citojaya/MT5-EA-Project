@@ -13,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.models.encoded_classifier import EncodedClassifier
+from src.data.history_paths import labels_dir_for_config, models_dir_for_config
 
 TARGET_COLUMN = "regime"
 EXCLUDED_COLUMNS = {"time", "regime", "regime_name"}
@@ -168,6 +169,11 @@ def parse_args():
     )
     parser.add_argument("start", nargs="?", help="Optional inclusive start datetime")
     parser.add_argument("end", nargs="?", help="Optional inclusive end datetime")
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
     return parser.parse_args()
 
 
@@ -177,8 +183,8 @@ def main() -> None:
     timeframe = args.timeframe.upper()
     mode = args.mode.lower()
 
-    input_file = Path(f"data/labels/{symbol}_{timeframe}_regime_labels.csv")
-    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    input_file = labels_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_regime_labels.csv"
+    model_dir = models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"{mode}_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"{mode}_feature_columns_{symbol}_{timeframe}.json"
 

@@ -11,7 +11,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.signals.regime_signals import generate_regime_signals
-from src.data.history_paths import find_existing_history_file, raw_dir_for_config
+from src.data.history_paths import (
+    backtest_dir_for_config,
+    features_dir_for_config,
+    find_existing_history_file,
+    models_dir_for_config,
+    raw_dir_for_config,
+)
 from src.features.build_features import build_features
 
 
@@ -103,7 +109,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        help="Optional output CSV path. Defaults to data/backtest/{symbol}_{timeframe}_backtest_signals.csv",
+        help="Optional output CSV path. Defaults to data/backtest/{broker}/{symbol}_{timeframe}_backtest_signals.csv",
     )
     parser.add_argument(
         "--rebuild-features",
@@ -123,14 +129,14 @@ def main():
     symbol = args.symbol
     timeframe = args.timeframe.upper()
 
-    input_file = Path(f"data/features/{symbol}_{timeframe}_features.csv")
-    model_dir = Path(f"data/models/stage1_regime_{symbol}_{timeframe}")
+    input_file = features_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_features.csv"
+    model_dir = models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
     output_file = (
         Path(args.output)
         if args.output
-        else Path(f"data/backtest/{symbol}_{timeframe}_backtest_signals.csv")
+        else backtest_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_backtest_signals.csv"
     )
 
     if args.rebuild_features:

@@ -1,20 +1,22 @@
+import argparse
 import json
 from pathlib import Path
+import sys
 
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix
 from xgboost import XGBClassifier
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.data.history_paths import labels_dir_for_config, models_dir_for_config
+
 
 SYMBOL = "BTCUSD"
 TIMEFRAME = "M5"
-
-INPUT_FILE = Path(f"data/labels/{SYMBOL}_{TIMEFRAME}_trade_labels.csv")
-MODEL_DIR = Path(f"models/stage2_signal_{SYMBOL}")
-MODEL_FILE = MODEL_DIR / f"trade_model_{SYMBOL}.joblib"
-FEATURE_COLUMNS_FILE = MODEL_DIR / f"feature_columns_{SYMBOL}.json"
-LABEL_MAP_FILE = MODEL_DIR / f"label_map_{SYMBOL}.json"
 
 TARGET_COLUMN = "trade_label"
 EXCLUDED_COLUMNS = {
@@ -27,7 +29,7 @@ TEST_SIZE = 0.20
 RANDOM_STATE = 42
 
 
-def load_dataset(input_file: Path = INPUT_FILE) -> pd.DataFrame:
+def load_dataset(input_file: Path) -> pd.DataFrame:
     df = pd.read_csv(input_file)
     if TARGET_COLUMN not in df.columns:
         raise ValueError(f"Missing target column: {TARGET_COLUMN}")
@@ -88,11 +90,15 @@ def save_artifacts(
     feature_columns: list[str],
     label_to_class: dict[int, int],
     class_to_label: dict[int, int],
+    model_dir: Path,
+    model_file: Path,
+    feature_columns_file: Path,
+    label_map_file: Path,
 ) -> None:
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, MODEL_FILE)
-    FEATURE_COLUMNS_FILE.write_text(json.dumps(feature_columns, indent=2), encoding="utf-8")
-    LABEL_MAP_FILE.write_text(
+    model_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_file)
+    feature_columns_file.write_text(json.dumps(feature_columns, indent=2), encoding="utf-8")
+    label_map_file.write_text(
         json.dumps(
             {
                 "label_to_class": label_to_class,
@@ -104,8 +110,29 @@ def save_artifacts(
     )
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("symbol", nargs="?", default=SYMBOL, help="Trading symbol, e.g. XAUUSD")
+    parser.add_argument("timeframe", nargs="?", default=TIMEFRAME, help="Timeframe, e.g. M5")
+    parser.add_argument(
+        "--config-file",
+        default="config/mt5_config.json",
+        help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    df = load_dataset()
+    args = parse_args()
+    symbol = args.symbol
+    timeframe = args.timeframe.upper()
+    input_file = labels_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_trade_labels.csv"
+    model_dir = models_dir_for_config(args.config_file) / f"stage2_signal_{symbol}_{timeframe}"
+    model_file = model_dir / f"trade_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
+    label_map_file = model_dir / f"label_map_{symbol}_{timeframe}.json"
+
+    df = load_dataset(input_file)
     feature_columns = select_feature_columns(df)
 
     if not feature_columns:
@@ -147,11 +174,20 @@ def main() -> None:
     print("Confusion matrix:")
     print(confusion_matrix(y_test, predictions, labels=encoded_labels))
 
-    save_artifacts(model, feature_columns, label_to_class, class_to_label)
+    save_artifacts(
+        model,
+        feature_columns,
+        label_to_class,
+        class_to_label,
+        model_dir,
+        model_file,
+        feature_columns_file,
+        label_map_file,
+    )
     print()
-    print(f"Saved model to: {MODEL_FILE}")
-    print(f"Saved feature columns to: {FEATURE_COLUMNS_FILE}")
-    print(f"Saved label map to: {LABEL_MAP_FILE}")
+    print(f"Saved model to: {model_file}")
+    print(f"Saved feature columns to: {feature_columns_file}")
+    print(f"Saved label map to: {label_map_file}")
 
 
 if __name__ == "__main__":
