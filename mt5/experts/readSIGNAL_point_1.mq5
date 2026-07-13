@@ -25,6 +25,7 @@ input double           InpLots            = 0.1;                // Fixed positio
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
+input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
 input double           InpBreakEvenAtAtr  = 2.5;                 // Move SL after profit reaches ATR multiple
 input double           InpBreakEvenPlusAtr= 0.2;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
@@ -274,6 +275,25 @@ bool HasManagedPosition()
   }
 
 //+------------------------------------------------------------------+
+//| Close this EA's open position on the chart symbol                 |
+//+------------------------------------------------------------------+
+void CloseManagedPosition(string reason)
+  {
+   if(!PositionSelect(_Symbol))
+      return;
+
+   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+   if(magic != InpMagicNumber)
+      return;
+
+   if(g_trade.PositionClose(_Symbol))
+      Print("Closed managed position: ", reason);
+   else
+      Print("Failed to close managed position. Reason: ", reason,
+            ". Retcode: ", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
+  }
+
+//+------------------------------------------------------------------+
 //| Place buy/sell based on the regime signal                         |
 //+------------------------------------------------------------------+
 void ProcessTradingSignal()
@@ -284,6 +304,7 @@ void ProcessTradingSignal()
    string signalSymbol = GetVal("symbol", "");
    string timeframe    = GetVal("timeframe", "");
    string regimeName   = GetVal("regime_name", "");
+   string confidenceStr= GetVal("confidence", "");
    string signalTime   = GetVal("time", "");
 
    if(signalSymbol != ChartSignalSymbol())
@@ -300,11 +321,27 @@ void ProcessTradingSignal()
    string regimeLower = regimeName;
    StringToLower(regimeLower);
 
+   if(StringFind(regimeLower, "transition") >= 0)
+     {
+      CloseManagedPosition("Transition regime");
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
    bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
    bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
 
    if(!buySignal && !sellSignal)
       return;
+
+   double confidence = StringToDouble(confidenceStr);
+   if(confidence < InpMinTradeConfidence)
+     {
+      Print("Trade skipped. Confidence ", confidence, " is below minimum ", InpMinTradeConfidence,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
 
    ENUM_TIMEFRAMES atrTimeframe = TimeframeFromString(timeframe);
    double atr = GetAtrValue(atrTimeframe);
