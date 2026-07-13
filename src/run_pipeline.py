@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-   ("src/data/download_history.py", "XAUUSD", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_FXV_DEMO.json"), # download complete history
+   ("src/data/download_history.py", "XAUUSD", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
    ("src/features/build_features.py", "XAUUSD", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
    ("src/labels/create_regime_labels.py", "XAUUSD", "M5", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin trainin date range
    ("src/models/train_stage1_regime.py", "XAUUSD", "M5", "backtest", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
