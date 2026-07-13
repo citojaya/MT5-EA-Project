@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--login", type=int, help="MT5 account login")
     parser.add_argument("--server", help="MT5 account server")
     parser.add_argument("--password", help="MT5 account password")
+    parser.add_argument("--terminal-path", help="Path to terminal64.exe")
     parser.add_argument("--bars", type=int, default=DEFAULT_BARS, help="Number of closed bars")
     parser.add_argument(
         "--include-current",
@@ -50,15 +51,30 @@ def load_credentials(args):
     login = args.login if args.login is not None else credentials.get("login")
     server = args.server if args.server is not None else credentials.get("server")
     password = args.password if args.password is not None else credentials.get("password")
+    terminal_path = (
+        args.terminal_path
+        if args.terminal_path is not None
+        else credentials.get("terminal_path")
+    )
 
     if login is None or server is None or password is None:
         raise ValueError("MT5 login, server, and password are required")
 
-    return int(login), str(server), str(password)
+    return int(login), str(server), str(password), terminal_path
 
 
-def connect_mt5(login: int, server: str, password: str):
-    if not mt5.initialize(login=login, server=server, password=password):
+def connect_mt5(login: int, server: str, password: str, terminal_path: str | None = None):
+    if terminal_path:
+        initialized = mt5.initialize(
+            path=terminal_path,
+            login=login,
+            server=server,
+            password=password,
+        )
+    else:
+        initialized = mt5.initialize(login=login, server=server, password=password)
+
+    if not initialized:
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
 
@@ -122,11 +138,11 @@ def main():
         valid_timeframes = ", ".join(TIMEFRAME_MAP)
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
-    login, server, password = load_credentials(args)
+    login, server, password, terminal_path = load_credentials(args)
     mt5_symbol = resolve_mt5_symbol(symbol, Path(args.config))
     output_file = Path(f"data/raw/ohlc_data_{symbol}.csv")
 
-    connect_mt5(login, server, password)
+    connect_mt5(login, server, password, terminal_path)
     try:
         df = fetch_ohlc(
             mt5_symbol,

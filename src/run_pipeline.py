@@ -11,10 +11,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-   ("src/data/download_history.py", "USDJPY", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
-   ("src/features/build_features.py", "USDJPY", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
-   ("src/labels/create_regime_labels.py", "USDJPY", "M5", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin trainin date range
-   ("src/models/train_stage1_regime.py", "USDJPY", "M5", "live", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
+   ("src/data/download_history.py", "USDJPY", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_FXV_DEMO.json"), # download complete history
+   #("src/features/build_features.py", "USDJPY", "M5", "2025-01-01", "2026-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create lables for whole history
+   #("src/labels/create_regime_labels.py", "USDJPY", "M5", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin trainin date range
+   #("src/models/train_stage1_regime.py", "USDJPY", "M5", "live", "2025-01-01", "2026-06-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
    #("src/backtest/backtest.py", "USDJPY", "M5", "2026-07-10", "2026-07-12 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
 
    #("src/backtest/backtest_line_by_line.py", "USDJPY", "M5", "--config-file", "config/mt5_config_ICM_DEMO.json")

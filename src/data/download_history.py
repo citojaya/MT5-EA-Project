@@ -70,7 +70,9 @@ def prepare_output_file(out_csv: Path, symbol: str, timeframe_name: str) -> Path
 
 
 def resolve_mt5_symbol(symbol: str, config_file: Path) -> str:
-    if config_file.name == "mt5_config.json" and not symbol.endswith(".a"):
+    if config_file.name == "mt5_config_ICM_DEMO.json" and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    if config_file.name == "mt5_config_ICM_LIVE.json" and not symbol.endswith(".a"):
         return f"{symbol}.a"
     return symbol
 
@@ -78,8 +80,18 @@ def resolve_mt5_symbol(symbol: str, config_file: Path) -> str:
 # =========================================================
 # MT5 HELPERS
 # =========================================================
-def connect_mt5(account: int, server: str, password: str):
-    if not mt5.initialize(login=account, server=server, password=password):
+def connect_mt5(account: int, server: str, password: str, terminal_path: str | None = None):
+    if terminal_path:
+        initialized = mt5.initialize(
+            path=terminal_path,
+            login=account,
+            server=server,
+            password=password,
+        )
+    else:
+        initialized = mt5.initialize(login=account, server=server, password=password)
+
+    if not initialized:
         raise RuntimeError(f"MT5 init failed: {mt5.last_error()}")
     print("Connected:", mt5.version())
 
@@ -211,6 +223,7 @@ def main():
     account = int(cfg["login"])
     server = str(cfg["server"])
     password = str(cfg["password"])
+    terminal_path = cfg.get("terminal_path")
     mt5_symbol = resolve_mt5_symbol(symbol, config_file)
     timeframe_name = args.timeframe.upper()
     date_from = parse_utc_datetime(args.start_date)
@@ -235,7 +248,7 @@ def main():
         print(f"Existing history last time: {existing['time'].max()}")
         print(f"Next download start: {download_from}")
 
-    connect_mt5(account, server, password)
+    connect_mt5(account, server, password, terminal_path)
     try:
         if download_from > date_to:
             print("Existing history already reaches or exceeds end_date. Nothing to download.")

@@ -82,7 +82,13 @@ def load_config(symbol: str, timeframe: str):
 # CONNECT MT5
 # -----------------------------
 def connect_mt5(config):
-    if not mt5.initialize():
+    terminal_path = config.get("terminal_path")
+    if terminal_path:
+        initialized = mt5.initialize(path=terminal_path)
+    else:
+        initialized = mt5.initialize()
+
+    if not initialized:
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
     authorized = mt5.login(
