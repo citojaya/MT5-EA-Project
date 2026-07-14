@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -32,6 +33,54 @@ def output_symbol_for_config(symbol: str, config_file: str) -> str:
     ) and not symbol.endswith(".a"):
         return f"{symbol}.a"
     return symbol
+
+
+def parse_raw_history_range(path: Path) -> tuple[datetime, datetime] | None:
+    parts = path.stem.rsplit("_", maxsplit=2)
+    if len(parts) != 3:
+        return None
+
+    try:
+        start = datetime.strptime(parts[1], "%Y%m%d")
+        end = datetime.strptime(parts[2], "%Y%m%d")
+    except ValueError:
+        return None
+
+    return start, end
+
+
+def find_raw_history_file_for_range(
+    search_dirs: list[Path],
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+) -> Path | None:
+    start_time = pd.to_datetime(start, utc=True).tz_localize(None)
+    end_time = pd.to_datetime(end, utc=True).tz_localize(None)
+    pattern = f"{symbol}_bidask_{timeframe}_*.csv"
+    containing_candidates = []
+    overlapping_candidates = []
+
+    for raw_dir in search_dirs:
+        for path in raw_dir.glob(pattern):
+            parsed_range = parse_raw_history_range(path)
+            if parsed_range is None:
+                continue
+
+            file_start, file_end = parsed_range
+            if file_start <= start_time and file_end >= end_time:
+                containing_candidates.append(path)
+            elif file_start <= end_time and file_end >= start_time:
+                overlapping_candidates.append(path)
+
+    if containing_candidates:
+        return sorted(containing_candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+
+    if overlapping_candidates:
+        return sorted(overlapping_candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+
+    return find_existing_history_file(search_dirs, symbol, timeframe)
 
 
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -151,10 +200,12 @@ def main():
     )
 
     if args.rebuild_features:
-        raw_file = find_existing_history_file(
+        raw_file = find_raw_history_file_for_range(
             [raw_dir_for_config(args.config_file), Path("data/raw")],
             symbol,
             timeframe,
+            args.start,
+            args.end,
         )
         if raw_file is None:
             raise RuntimeError(f"No raw history file found for {symbol} {timeframe}")
