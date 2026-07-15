@@ -48,7 +48,6 @@ bool   g_fileOk  = false;
 string g_lastErr = "";
 CTrade g_trade;
 string g_lastTradeSignalTime = "";
-long   g_lastEntryType = -1;
 bool   g_signalsLoaded = false;
 datetime g_signalTimes[];
 string g_signalTimeText[];
@@ -558,9 +557,6 @@ bool ManageBasketProfitExit()
       closeRequested = true;
      }
 
-   if(closeRequested)
-      g_lastEntryType = -1;
-
    return closeRequested;
   }
 
@@ -597,13 +593,10 @@ void ManageBasketProtectionRemoval()
   }
 
 //+------------------------------------------------------------------+
-//| Get the direction of the newest managed open position             |
+//| Close profitable managed positions of one direction               |
 //+------------------------------------------------------------------+
-long GetNewestManagedPositionType()
+void CloseProfitablePositionsByType(long positionTypeToClose, string reason)
   {
-   datetime newestTime = 0;
-   long newestType = -1;
-
    for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
      {
       ulong ticket = PositionGetTicket(positionIndex);
@@ -616,18 +609,13 @@ long GetNewestManagedPositionType()
          continue;
 
       long positionType = PositionGetInteger(POSITION_TYPE);
-      if(positionType != POSITION_TYPE_BUY && positionType != POSITION_TYPE_SELL)
+      if(positionType != positionTypeToClose)
          continue;
 
-      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-      if(openTime >= newestTime)
-        {
-         newestTime = openTime;
-         newestType = positionType;
-        }
+      double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(profit > 0.0)
+         CloseManagedPositionByTicket(ticket, reason);
      }
-
-   return newestType;
   }
 
 //+------------------------------------------------------------------+
@@ -659,11 +647,9 @@ void CloseProfitableOppositePositionBeforeHedge(bool buySignal, bool sellSignal)
       if(positionType != oppositeType)
          continue;
 
-      double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      if(profit > 0.0)
-         CloseManagedPositionByTicket(ticket, buySignal ?
-                                      "Profitable SELL closed before opening BUY" :
-                                      "Profitable BUY closed before opening SELL");
+      CloseProfitablePositionsByType(oppositeType, buySignal ?
+                                     "Profitable SELL closed before opening BUY" :
+                                     "Profitable BUY closed before opening SELL");
       return;
      }
   }
@@ -731,7 +717,6 @@ void ProcessTradingSignal()
    int buyCount = CountManagedPositionsByType(POSITION_TYPE_BUY);
    int sellCount = CountManagedPositionsByType(POSITION_TYPE_SELL);
    bool isHedged = (buyCount > 0 && sellCount > 0);
-   long desiredPositionType = buySignal ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
 
    if(!isHedged)
      {
@@ -755,15 +740,31 @@ void ProcessTradingSignal()
      }
    else
      {
-      if(g_lastEntryType < 0)
-         g_lastEntryType = GetNewestManagedPositionType();
-
-      if(g_lastEntryType == desiredPositionType)
+      if(buySignal)
         {
-         Print("Trade skipped. Hedged basket is waiting for opposite signal before another same-direction entry: ",
-               regimeName, " at ", signalTime);
-         g_lastTradeSignalTime = signalTime;
-         return;
+         CloseProfitablePositionsByType(POSITION_TYPE_SELL, "Profitable SELL closed on hedged BUY signal");
+         buyCount = CountManagedPositionsByType(POSITION_TYPE_BUY);
+         sellCount = CountManagedPositionsByType(POSITION_TYPE_SELL);
+         if(sellCount <= buyCount)
+           {
+            Print("Trade skipped. Hedged BUY signal did not require another BUY after recount. BUY count ",
+                  buyCount, ", SELL count ", sellCount, " at ", signalTime);
+            g_lastTradeSignalTime = signalTime;
+            return;
+           }
+        }
+      else if(sellSignal)
+        {
+         CloseProfitablePositionsByType(POSITION_TYPE_BUY, "Profitable BUY closed on hedged SELL signal");
+         buyCount = CountManagedPositionsByType(POSITION_TYPE_BUY);
+         sellCount = CountManagedPositionsByType(POSITION_TYPE_SELL);
+         if(buyCount <= sellCount)
+           {
+            Print("Trade skipped. Hedged SELL signal did not require another SELL after recount. BUY count ",
+                  buyCount, ", SELL count ", sellCount, " at ", signalTime);
+            g_lastTradeSignalTime = signalTime;
+            return;
+           }
         }
      }
 
@@ -785,7 +786,6 @@ void ProcessTradingSignal()
    if(opened)
      {
       g_lastTradeSignalTime = signalTime;
-      g_lastEntryType = desiredPositionType;
       Print("Opened hedge trade from regime signal: ", regimeName, " at ", signalTime);
      }
    else

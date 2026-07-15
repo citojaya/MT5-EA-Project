@@ -23,6 +23,9 @@ from src.features.build_features import build_features
 
 HISTORY_BARS = 1000
 MT5_COMMON_FILES_DIR = Path.home() / "AppData/Roaming/MetaQuotes/Terminal/Common/Files"
+STAGE2_ELIGIBLE_REGIMES = {0, 2}
+STAGE2_SIGNAL_COLUMN = "stage2_signal"
+STAGE2_PROBABILITY_COLUMN = "stage2_probability"
 
 
 def output_symbol_for_config(symbol: str, config_file: str) -> str:
@@ -90,6 +93,60 @@ def load_model(model_file: Path, feature_columns_file: Path):
         feature_columns = json.load(f)
 
     return model, feature_columns
+
+
+def class_probability_index(model, positive_class: int = 1) -> int | None:
+    classes = getattr(model, "classes_", None)
+    if classes is None:
+        return None
+
+    for class_index, class_label in enumerate(classes):
+        if int(class_label) == positive_class:
+            return class_index
+
+    return None
+
+
+def add_stage2_predictions(
+    signals: pd.DataFrame,
+    features: pd.DataFrame,
+    stage2_model,
+    stage2_feature_columns: list[str],
+) -> pd.DataFrame:
+    signals = signals.copy()
+    stage2_features = features.reset_index(drop=True).copy()
+    stage2_features["regime"] = signals["regime"].astype(int).values
+    stage2_features["order_direction"] = (
+        stage2_features["regime"].map({0: 1, 2: -1}).fillna(0).astype(int)
+    )
+
+    missing_columns = [
+        column for column in stage2_feature_columns if column not in stage2_features.columns
+    ]
+    if missing_columns:
+        raise ValueError(f"Missing stage 2 feature columns: {missing_columns}")
+
+    signals[STAGE2_SIGNAL_COLUMN] = 0
+    signals[STAGE2_PROBABILITY_COLUMN] = 0.0
+
+    eligible_mask = stage2_features["regime"].isin(STAGE2_ELIGIBLE_REGIMES)
+    if not eligible_mask.any():
+        return signals
+
+    x_stage2 = stage2_features.loc[eligible_mask, stage2_feature_columns]
+    predictions = stage2_model.predict(x_stage2).astype(int)
+    probabilities = predictions.astype(float)
+
+    if hasattr(stage2_model, "predict_proba"):
+        proba = stage2_model.predict_proba(x_stage2)
+        positive_index = class_probability_index(stage2_model, positive_class=1)
+        if positive_index is not None:
+            probabilities = proba[:, positive_index]
+
+    eligible_indexes = signals.index[eligible_mask]
+    signals.loc[eligible_indexes, STAGE2_SIGNAL_COLUMN] = predictions
+    signals.loc[eligible_indexes, STAGE2_PROBABILITY_COLUMN] = probabilities.round(6)
+    return signals
 
 
 def filter_date_range(
@@ -176,6 +233,17 @@ def parse_args():
         help="Rebuild and cache features from the raw OHLC CSV before backtesting",
     )
     parser.add_argument(
+        "--disable-stage2",
+        action="store_true",
+        help="Write stage 1 signals only, without stage 2 trade-filter columns",
+    )
+    parser.add_argument(
+        "--stage2-mode",
+        default="live",
+        choices=["backtest", "live"],
+        help="Stage 2 artifact prefix to load",
+    )
+    parser.add_argument(
         "--config-file",
         default="config/mt5_config.json",
         help="MT5 config file. Broker/server in this file controls the raw history subdirectory.",
@@ -193,6 +261,9 @@ def main():
     model_dir = models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
     model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
     feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
+    stage2_model_dir = models_dir_for_config(args.config_file) / f"stage2_trade_{symbol}_{timeframe}"
+    stage2_model_file = stage2_model_dir / f"{args.stage2_mode}_trade_model_{symbol}_{timeframe}.joblib"
+    stage2_feature_columns_file = stage2_model_dir / f"{args.stage2_mode}_feature_columns_{symbol}_{timeframe}.json"
     output_file = (
         Path(args.output)
         if args.output
@@ -238,6 +309,18 @@ def main():
         timeframe=timeframe,
     )
 
+    if not args.disable_stage2:
+        stage2_model, stage2_feature_columns = load_model(
+            stage2_model_file,
+            stage2_feature_columns_file,
+        )
+        signals = add_stage2_predictions(
+            signals=signals,
+            features=features,
+            stage2_model=stage2_model,
+            stage2_feature_columns=stage2_feature_columns,
+        )
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
     signals.to_csv(output_file, index=False)
 
@@ -245,6 +328,10 @@ def main():
     print(f"Rows: {len(signals)}")
     print()
     print(signals["regime_name"].value_counts())
+    if not args.disable_stage2:
+        print()
+        print("Stage 2 signal distribution:")
+        print(signals[STAGE2_SIGNAL_COLUMN].value_counts().sort_index())
     print()
     print(signals.tail())
 

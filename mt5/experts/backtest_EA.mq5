@@ -31,6 +31,8 @@ input double           InpTakeProfitAtr   = 6.0;                 // Take profit 
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
 input int              InpCloseAfterBars  = 60;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
+input bool             InpUseStage2Filter = true;                // Require stage 2 trade approval
+input double           InpMinStage2Confidence = 0.55;            // Minimum stage 2 favorable probability
 input bool             InpWaitForSignalCandleClose = true;       // Use signal one candle after CSV time
 input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
 input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
@@ -58,6 +60,8 @@ string g_signalRegimes[];
 string g_signalRegimeNames[];
 string g_signalConfidence[];
 string g_signalUpdatedUtc[];
+string g_signalStage2Signals[];
+string g_signalStage2Confidence[];
 int    g_selectedSignalIndex = -1;
 int    g_atrHandle = INVALID_HANDLE;
 ENUM_TIMEFRAMES g_atrTimeframe = PERIOD_CURRENT;
@@ -166,6 +170,8 @@ void AppendSignalRow(string &fields[])
    ArrayResize(g_signalRegimeNames, rowIndex + 1, 10000);
    ArrayResize(g_signalConfidence, rowIndex + 1, 10000);
    ArrayResize(g_signalUpdatedUtc, rowIndex + 1, 10000);
+   ArrayResize(g_signalStage2Signals, rowIndex + 1, 10000);
+   ArrayResize(g_signalStage2Confidence, rowIndex + 1, 10000);
 
    g_signalTimes[rowIndex] = signalTime;
    g_signalTimeText[rowIndex] = fields[0];
@@ -176,6 +182,8 @@ void AppendSignalRow(string &fields[])
    g_signalRegimeNames[rowIndex] = fields[5];
    g_signalConfidence[rowIndex] = fields[6];
    g_signalUpdatedUtc[rowIndex] = fields[7];
+   g_signalStage2Signals[rowIndex] = ArraySize(fields) > 8 ? fields[8] : "0";
+   g_signalStage2Confidence[rowIndex] = ArraySize(fields) > 9 ? fields[9] : "0";
   }
 
 //+------------------------------------------------------------------+
@@ -291,6 +299,9 @@ bool SelectSignalForTesterTime()
    SetKeyValue("regime_name", g_signalRegimeNames[g_selectedSignalIndex]);
    SetKeyValue("confidence",  g_signalConfidence[g_selectedSignalIndex]);
    SetKeyValue("updated_utc", g_signalUpdatedUtc[g_selectedSignalIndex]);
+   SetKeyValue("stage2_signal", g_signalStage2Signals[g_selectedSignalIndex]);
+   SetKeyValue("stage2_confidence", g_signalStage2Confidence[g_selectedSignalIndex]);
+   SetKeyValue("stage2_probability", g_signalStage2Confidence[g_selectedSignalIndex]);
 
    g_lastErr = "";
    return true;
@@ -480,16 +491,16 @@ bool ClosePositionOnRegimeChange(string regime, string signalTime)
 
    long positionType = PositionGetInteger(POSITION_TYPE);
 
-   if(positionType == POSITION_TYPE_BUY && regime != "0")
+   if(positionType == POSITION_TYPE_BUY && regime == "7")
      {
-      CloseManagedPosition("BUY closed because regime is no longer 0. Signal regime: " + regime);
+      //CloseManagedPosition("BUY closed because regime is no longer 0. Signal regime: " + regime);
       g_lastTradeSignalTime = signalTime;
       return true;
      }
 
-   if(positionType == POSITION_TYPE_SELL && regime != "2")
+   if(positionType == POSITION_TYPE_SELL && regime == "7")
      {
-      CloseManagedPosition("SELL closed because regime is no longer 2. Signal regime: " + regime);
+      //CloseManagedPosition("SELL closed because regime is no longer 2. Signal regime: " + regime);
       g_lastTradeSignalTime = signalTime;
       return true;
      }
@@ -538,6 +549,8 @@ void ProcessTradingSignal()
    string regime       = GetVal("regime", "");
    string regimeName   = GetVal("regime_name", "");
    string confidenceStr= GetVal("confidence", "");
+   string stage2Signal = GetVal("stage2_signal", "0");
+   string stage2ConfidenceStr = GetVal("stage2_confidence", "0");
    string signalTime   = GetVal("time", "");
 
    if(signalSymbol != _Symbol)
@@ -564,8 +577,8 @@ void ProcessTradingSignal()
    if(HasManagedPosition())
       return;
 
-   bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
-   bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
+   bool buySignal  = (regime == "0");
+   bool sellSignal = (regime == "2");
 
    if(!buySignal && !sellSignal)
       return;
@@ -582,6 +595,17 @@ void ProcessTradingSignal()
    if(confidence < InpMinTradeConfidence)
      {
       Print("Trade skipped. Confidence ", confidence, " is below minimum ", InpMinTradeConfidence,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
+   double stage2Confidence = StringToDouble(stage2ConfidenceStr);
+   if(InpUseStage2Filter && (stage2Signal != "1" || stage2Confidence < InpMinStage2Confidence))
+     {
+      Print("Trade skipped by stage 2. Stage2 signal ", stage2Signal,
+            ", confidence ", stage2Confidence,
+            ", minimum ", InpMinStage2Confidence,
             " for regime signal: ", regimeName, " at ", signalTime);
       g_lastTradeSignalTime = signalTime;
       return;
@@ -614,7 +638,10 @@ void ProcessTradingSignal()
    if(opened)
      {
       g_lastTradeSignalTime = signalTime;
-      Print("Opened trade from regime signal: ", regimeName, " at ", signalTime);
+      Print("Opened trade from regime signal: ", regimeName,
+            ", stage2 signal ", stage2Signal,
+            ", stage2 confidence ", stage2Confidence,
+            " at ", signalTime);
      }
    else
      {
@@ -733,7 +760,7 @@ void DrawPanel()
    int y       = InpYOffset;
    int lineH   = InpFontSize + 8;
    int panelW  = 300;
-   int panelH  = lineH * 9 + 14;
+   int panelH  = lineH * 10 + 14;
 
    SetBackground(PREFIX + "bg", x - 8, y - 8, panelW, panelH);
 
@@ -741,7 +768,7 @@ void DrawPanel()
      {
       SetLabel(PREFIX + "title", "REGIME SIGNAL - FILE ERROR", x, y, clrRed, InpFontSize + 1);
       SetLabel(PREFIX + "l1", g_lastErr, x, y + lineH, clrOrange);
-      for(int i = 2; i < 8; i++)
+      for(int i = 2; i < 9; i++)
          SetLabel(PREFIX + "l" + IntegerToString(i), "", x, y + lineH * i, clrGray);
       return;
      }
@@ -752,10 +779,13 @@ void DrawPanel()
    string regimeNum   = GetVal("regime",      "-");
    string regimeName  = GetVal("regime_name", "-");
    string confStr     = GetVal("confidence",  "-");
+   string stage2Signal= GetVal("stage2_signal", "-");
+   string stage2ConfStr = GetVal("stage2_confidence", "-");
    string sigTime     = GetVal("time",        "-");
    string updUtc      = GetVal("updated_utc", "-");
 
    double conf   = StringToDouble(confStr) * 100.0;
+   double stage2Conf = StringToDouble(stage2ConfStr) * 100.0;
    color  regCol = RegimeColor(regimeName);
 
    datetime updDt  = ParseUtcDateTime(updUtc);
@@ -778,8 +808,9 @@ void DrawPanel()
    SetLabel(PREFIX + "l2", "Close:       " + closeStr,                             x, y + lineH * i, clrWhite);  i++;
    SetLabel(PREFIX + "l3", "Regime:      #" + regimeNum + " " + regimeName,        x, y + lineH * i, regCol);    i++;
    SetLabel(PREFIX + "l4", "Confidence:  " + DoubleToString(conf, 2) + "%",        x, y + lineH * i, clrWhite);  i++;
-   SetLabel(PREFIX + "l5", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l6", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l7", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
+   SetLabel(PREFIX + "l5", "Stage2:      " + stage2Signal + " / " + DoubleToString(stage2Conf, 2) + "%", x, y + lineH * i, clrWhite); i++;
+   SetLabel(PREFIX + "l6", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l7", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l8", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
   }
 //+------------------------------------------------------------------+

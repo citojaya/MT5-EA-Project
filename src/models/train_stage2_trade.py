@@ -13,17 +13,26 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.data.history_paths import labels_dir_for_config, models_dir_for_config
+from src.models.train_stage1_regime import NORMALIZED_FEATURE_COLUMNS
 
 
 SYMBOL = "BTCUSD"
 TIMEFRAME = "M5"
 
 TARGET_COLUMN = "trade_label"
+STAGE2_FEATURE_COLUMNS = NORMALIZED_FEATURE_COLUMNS + [
+    "regime",
+    "order_direction",
+]
 EXCLUDED_COLUMNS = {
     "time",
     "trade_label",
     "trade_label_name",
     "regime_name",
+    "entry_price",
+    "future_close_5",
+    "future_return_5",
+    "directional_return_5",
 }
 TEST_SIZE = 0.20
 RANDOM_STATE = 42
@@ -37,9 +46,25 @@ def load_dataset(input_file: Path) -> pd.DataFrame:
 
 
 def select_feature_columns(df: pd.DataFrame) -> list[str]:
-    candidate_columns = [column for column in df.columns if column not in EXCLUDED_COLUMNS]
-    numeric_columns = df[candidate_columns].select_dtypes(include="number").columns
-    return list(numeric_columns)
+    missing_columns = [
+        column for column in STAGE2_FEATURE_COLUMNS if column not in df.columns
+    ]
+    if missing_columns:
+        missing_text = ", ".join(missing_columns)
+        raise ValueError(
+            "Missing stage 2 feature columns. Rebuild trade labels first: "
+            f"{missing_text}"
+        )
+
+    numeric_columns = df[STAGE2_FEATURE_COLUMNS].select_dtypes(include="number").columns
+    non_numeric_columns = [
+        column for column in STAGE2_FEATURE_COLUMNS if column not in numeric_columns
+    ]
+    if non_numeric_columns:
+        non_numeric_text = ", ".join(non_numeric_columns)
+        raise ValueError(f"Stage 2 feature columns must be numeric: {non_numeric_text}")
+
+    return STAGE2_FEATURE_COLUMNS.copy()
 
 
 def chronological_split(
@@ -61,14 +86,6 @@ def chronological_split(
     return x_train, x_test, y_train, y_test
 
 
-def encode_labels(y: pd.Series) -> tuple[pd.Series, dict[int, int], dict[int, int]]:
-    real_labels = [int(label) for label in sorted(y.astype(int).unique())]
-    label_to_class = {label: class_id for class_id, label in enumerate(real_labels)}
-    class_to_label = {class_id: label for label, class_id in label_to_class.items()}
-    encoded = y.astype(int).map(label_to_class)
-    return encoded, label_to_class, class_to_label
-
-
 def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
     model = XGBClassifier(
         n_estimators=300,
@@ -76,8 +93,8 @@ def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
-        objective="multi:softprob",
-        eval_metric="mlogloss",
+        objective="binary:logistic",
+        eval_metric="logloss",
         random_state=RANDOM_STATE,
         n_jobs=-1,
     )
@@ -88,21 +105,27 @@ def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
 def save_artifacts(
     model: XGBClassifier,
     feature_columns: list[str],
-    label_to_class: dict[int, int],
-    class_to_label: dict[int, int],
     model_dir: Path,
     model_file: Path,
     feature_columns_file: Path,
-    label_map_file: Path,
+    metadata_file: Path,
 ) -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_file)
     feature_columns_file.write_text(json.dumps(feature_columns, indent=2), encoding="utf-8")
-    label_map_file.write_text(
+    metadata_file.write_text(
         json.dumps(
             {
-                "label_to_class": label_to_class,
-                "class_to_label": class_to_label,
+                "target_column": TARGET_COLUMN,
+                "target_meaning": {
+                    "0": "next 5 completed candles were not favorable",
+                    "1": "next 5 completed candles were favorable",
+                },
+                "eligible_regimes": [0, 2],
+                "order_direction": {
+                    "1": "buy-style setup from regime 0",
+                    "-1": "sell-style setup from regime 2",
+                },
             },
             indent=2,
         ),
@@ -116,8 +139,15 @@ def parse_args():
     parser.add_argument("timeframe", nargs="?", default=TIMEFRAME, help="Timeframe, e.g. M5")
     parser.add_argument(
         "--config-file",
-        default="config/mt5_config.json",
+        default="config/mt5_config_ICM_DEMO.json",
         help="MT5 config file. Broker/server in this file controls the data subdirectory.",
+    )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        default="live",
+        choices=["backtest", "live"],
+        help="Artifact prefix: use 'backtest' for backtest models or 'live' for live models",
     )
     return parser.parse_args()
 
@@ -126,11 +156,12 @@ def main() -> None:
     args = parse_args()
     symbol = args.symbol
     timeframe = args.timeframe.upper()
+    mode = args.mode.lower()
     input_file = labels_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_trade_labels.csv"
-    model_dir = models_dir_for_config(args.config_file) / f"stage2_signal_{symbol}_{timeframe}"
-    model_file = model_dir / f"trade_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"feature_columns_{symbol}_{timeframe}.json"
-    label_map_file = model_dir / f"label_map_{symbol}_{timeframe}.json"
+    model_dir = models_dir_for_config(args.config_file) / f"stage2_trade_{symbol}_{timeframe}"
+    model_file = model_dir / f"{mode}_trade_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"{mode}_feature_columns_{symbol}_{timeframe}.json"
+    metadata_file = model_dir / f"{mode}_metadata_{symbol}_{timeframe}.json"
 
     df = load_dataset(input_file)
     feature_columns = select_feature_columns(df)
@@ -140,24 +171,24 @@ def main() -> None:
 
     model_data = df[feature_columns + [TARGET_COLUMN]].dropna()
     x = model_data[feature_columns]
-    y_real = model_data[TARGET_COLUMN].astype(int)
-    y_encoded, label_to_class, class_to_label = encode_labels(y_real)
+    y = model_data[TARGET_COLUMN].astype(int)
 
-    x_train, x_test, y_train, y_test = chronological_split(x, y_encoded)
+    labels = sorted(y.unique())
+    if labels != [0, 1]:
+        raise ValueError(f"Stage 2 target must contain binary labels [0, 1], found: {labels}")
+
+    x_train, x_test, y_train, y_test = chronological_split(x, y)
 
     print(f"Rows: {len(model_data)}")
     print(f"Train rows: {len(x_train)}")
     print(f"Test rows: {len(x_test)}")
     print(f"Feature count: {len(feature_columns)}")
-    print("Real trade label distribution:")
-    print(y_real.value_counts().sort_index())
-    print("Training stage 2 trade classifier without shuffling time series data...")
+    print("Trade label distribution:")
+    print(y.value_counts().sort_index())
+    print("Training stage 2 favorable-direction classifier without shuffling time series data...")
 
     model = train_model(x_train, y_train)
     predictions = model.predict(x_test)
-
-    encoded_labels = sorted(y_encoded.unique())
-    target_names = [str(class_to_label[class_id]) for class_id in encoded_labels]
 
     print()
     print("Classification report:")
@@ -165,29 +196,27 @@ def main() -> None:
         classification_report(
             y_test,
             predictions,
-            labels=encoded_labels,
-            target_names=target_names,
+            labels=[0, 1],
+            target_names=["Unfavorable", "Favorable"],
             zero_division=0,
         )
     )
 
     print("Confusion matrix:")
-    print(confusion_matrix(y_test, predictions, labels=encoded_labels))
+    print(confusion_matrix(y_test, predictions, labels=[0, 1]))
 
     save_artifacts(
         model,
         feature_columns,
-        label_to_class,
-        class_to_label,
         model_dir,
         model_file,
         feature_columns_file,
-        label_map_file,
+        metadata_file,
     )
     print()
     print(f"Saved model to: {model_file}")
     print(f"Saved feature columns to: {feature_columns_file}")
-    print(f"Saved label map to: {label_map_file}")
+    print(f"Saved metadata to: {metadata_file}")
 
 
 if __name__ == "__main__":
