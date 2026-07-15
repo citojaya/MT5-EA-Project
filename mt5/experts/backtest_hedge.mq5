@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//|                                            RegimeSignalPanel.mq5 |
+//|                                                backtest_hedge.mq5 |
 //|   Reads a key=value regime-signal text file and displays it on   |
-//|   the chart as a clean, auto-refreshing info panel.              |
+//|   the chart, while placing flip-gated hedge entries in tester.   |
 //+------------------------------------------------------------------+
 #property copyright "Regime Signal Panel"
 #property link      ""
@@ -28,8 +28,8 @@ input string           InpTradeEndTime    = "22:00";             // Latest time 
 input double           InpLots            = 0.01;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
-input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
-input int              InpCloseAfterBars  = 60;                   // Close position after this many candles
+input double           InpStopLossAtr     = 600.0;                 // Stop loss in ATR multiples
+input int              InpCloseAfterBars  = 6000;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
 input bool             InpWaitForSignalCandleClose = true;       // Use signal one candle after CSV time
 input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
@@ -48,6 +48,7 @@ bool   g_fileOk  = false;
 string g_lastErr = "";
 CTrade g_trade;
 string g_lastTradeSignalTime = "";
+long   g_lastEntryType = -1;
 bool   g_signalsLoaded = false;
 datetime g_signalTimes[];
 string g_signalTimeText[];
@@ -92,8 +93,11 @@ void OnTick()
    if(!InpUseTimer)
       ReadAndDisplay();
 
+   if(ManageBasketProfitExit())
+      return;
+
    ManageBreakEven();
-   ManageCandleExit();
+   ManageBasketProtectionRemoval();
   }
 
 //+------------------------------------------------------------------+
@@ -109,6 +113,8 @@ void ReadAndDisplay()
   {
    g_fileOk = SelectSignalForTesterTime();
    ProcessTradingSignal();
+   if(!ManageBasketProfitExit())
+      ManageBasketProtectionRemoval();
    if(InpShowPanel)
      {
       DrawPanel();
@@ -436,93 +442,230 @@ double GetAtrValue(ENUM_TIMEFRAMES timeframe)
   }
 
 //+------------------------------------------------------------------+
-//| Check if this EA already has an open position on the chart symbol |
+//| Close one managed position by ticket                              |
 //+------------------------------------------------------------------+
-bool HasManagedPosition()
+void CloseManagedPositionByTicket(ulong ticket, string reason)
   {
-   if(!PositionSelect(_Symbol))
-      return false;
-
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   return magic == InpMagicNumber;
-  }
-
-//+------------------------------------------------------------------+
-//| Close this EA's open position on the chart symbol                 |
-//+------------------------------------------------------------------+
-void CloseManagedPosition(string reason)
-  {
-   if(!PositionSelect(_Symbol))
+   if(!PositionSelectByTicket(ticket))
       return;
 
    ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
    if(magic != InpMagicNumber)
       return;
 
-   if(!g_trade.PositionClose(_Symbol))
+   if(!g_trade.PositionClose(ticket))
       Print("Failed to close position: ", reason, ". Retcode: ", g_trade.ResultRetcodeDescription());
    else
       Print("Closed position: ", reason);
   }
 
 //+------------------------------------------------------------------+
-//| Close managed position when the current regime no longer supports |
-//| its direction                                                     |
+//| Count managed positions of one direction                          |
 //+------------------------------------------------------------------+
-bool ClosePositionOnRegimeChange(string regime, string signalTime)
+int CountManagedPositionsByType(long positionTypeToCount)
   {
-   if(!PositionSelect(_Symbol))
-      return false;
+   int count = 0;
 
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
-      return false;
-
-   long positionType = PositionGetInteger(POSITION_TYPE);
-
-   if(positionType == POSITION_TYPE_BUY && regime != "0")
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
      {
-      CloseManagedPosition("BUY closed because regime is no longer 0. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+      if(positionType == positionTypeToCount)
+         count++;
      }
 
-   if(positionType == POSITION_TYPE_SELL && regime != "2")
-     {
-      CloseManagedPosition("SELL closed because regime is no longer 2. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
-     }
-
-   return false;
+   return count;
   }
 
 //+------------------------------------------------------------------+
-//| Close this EA's position after the configured candle count        |
+//| Count all managed buy/sell positions on this symbol               |
 //+------------------------------------------------------------------+
-void ManageCandleExit()
+int CountManagedPositions()
   {
-   if(!InpEnableTrading || InpCloseAfterBars <= 0)
+   return CountManagedPositionsByType(POSITION_TYPE_BUY) +
+          CountManagedPositionsByType(POSITION_TYPE_SELL);
+  }
+
+//+------------------------------------------------------------------+
+//| Check whether at least one buy and one sell are open              |
+//+------------------------------------------------------------------+
+bool HasHedgeBasket()
+  {
+   return CountManagedPositionsByType(POSITION_TYPE_BUY) > 0 &&
+          CountManagedPositionsByType(POSITION_TYPE_SELL) > 0;
+  }
+
+//+------------------------------------------------------------------+
+//| Close all positions only for profitable expanded hedge baskets    |
+//+------------------------------------------------------------------+
+bool ManageBasketProfitExit()
+  {
+   if(!InpEnableTrading)
+      return false;
+
+   int buyCount = 0;
+   int sellCount = 0;
+   double netProfit = 0.0;
+
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
+     {
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+      if(positionType == POSITION_TYPE_BUY)
+         buyCount++;
+      else if(positionType == POSITION_TYPE_SELL)
+         sellCount++;
+
+      netProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+     }
+
+   if(buyCount <= 1 || sellCount <= 1 || netProfit <= 0.0)
+      return false;
+
+   string reason = "Expanded hedge basket exit with BUY count " + IntegerToString(buyCount) +
+                   ", SELL count " + IntegerToString(sellCount) +
+                   ", net profit " + DoubleToString(netProfit, 2);
+
+   bool closeRequested = false;
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
+     {
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      CloseManagedPositionByTicket(ticket, reason);
+      closeRequested = true;
+     }
+
+   if(closeRequested)
+      g_lastEntryType = -1;
+
+   return closeRequested;
+  }
+
+//+------------------------------------------------------------------+
+//| Remove stop loss and take profit while a hedge is active          |
+//+------------------------------------------------------------------+
+void ManageBasketProtectionRemoval()
+  {
+   if(!InpEnableTrading || !HasHedgeBasket())
       return;
 
-   if(!PositionSelect(_Symbol))
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
+     {
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      double currentSl = PositionGetDouble(POSITION_SL);
+      double currentTp = PositionGetDouble(POSITION_TP);
+
+      if(currentSl == 0.0 && currentTp == 0.0)
+         continue;
+
+      if(!g_trade.PositionModify(ticket, 0.0, 0.0))
+         Print("Failed to remove hedge protection from position. Retcode: ", g_trade.ResultRetcodeDescription());
+      else
+         Print("Removed SL/TP from hedged position ticket ", ticket);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Get the direction of the newest managed open position             |
+//+------------------------------------------------------------------+
+long GetNewestManagedPositionType()
+  {
+   datetime newestTime = 0;
+   long newestType = -1;
+
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
+     {
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+      if(positionType != POSITION_TYPE_BUY && positionType != POSITION_TYPE_SELL)
+         continue;
+
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(openTime >= newestTime)
+        {
+         newestTime = openTime;
+         newestType = positionType;
+        }
+     }
+
+   return newestType;
+  }
+
+//+------------------------------------------------------------------+
+//| Close the single profitable opposite position before hedging      |
+//+------------------------------------------------------------------+
+void CloseProfitableOppositePositionBeforeHedge(bool buySignal, bool sellSignal)
+  {
+   if(HasHedgeBasket())
       return;
 
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
+   long oppositeType = buySignal ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+   int oppositeCount = CountManagedPositionsByType(oppositeType);
+   int sameCount = CountManagedPositionsByType(buySignal ? POSITION_TYPE_BUY : POSITION_TYPE_SELL);
+   if(oppositeCount != 1 || sameCount != 0)
       return;
 
-   string timeframe = GetVal("timeframe", "");
-   ENUM_TIMEFRAMES exitTimeframe = TimeframeFromString(timeframe);
-   datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-   int barsSinceOpen = iBarShift(_Symbol, exitTimeframe, openTime, false);
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
+     {
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
 
-   if(barsSinceOpen < InpCloseAfterBars)
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+      if(positionType != oppositeType)
+         continue;
+
+      double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(profit > 0.0)
+         CloseManagedPositionByTicket(ticket, buySignal ?
+                                      "Profitable SELL closed before opening BUY" :
+                                      "Profitable BUY closed before opening SELL");
       return;
-
-   CloseManagedPosition(
-      "Time exit after " + IntegerToString(InpCloseAfterBars) + " candles"
-   );
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -546,28 +689,17 @@ void ProcessTradingSignal()
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
       return;
 
-   string regimeLower = regimeName;
-   StringToLower(regimeLower);
-
-   if(ClosePositionOnRegimeChange(regime, signalTime))
-      return;
-
-   if(StringFind(regimeLower, "transition") >= 0)
-     {
-      CloseManagedPosition("Transition regime");
-      g_lastTradeSignalTime = signalTime;
-      return;
-     }
-
    ManageBreakEven();
 
-   if(HasManagedPosition())
-      return;
-
-   bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
-   bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
+   bool buySignal  = (regime == "0");
+   bool sellSignal = (regime == "2");
 
    if(!buySignal && !sellSignal)
+      return;
+
+   string regimeLower = regimeName;
+   StringToLower(regimeLower);
+   if(StringFind(regimeLower, "transition") >= 0)
       return;
 
    if(!IsWithinTradeTime())
@@ -596,6 +728,45 @@ void ProcessTradingSignal()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
+   int buyCount = CountManagedPositionsByType(POSITION_TYPE_BUY);
+   int sellCount = CountManagedPositionsByType(POSITION_TYPE_SELL);
+   bool isHedged = (buyCount > 0 && sellCount > 0);
+   long desiredPositionType = buySignal ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+
+   if(!isHedged)
+     {
+      if(buySignal && buyCount > 0)
+        {
+         Print("Trade skipped. BUY position already open before hedge for regime signal: ",
+               regimeName, " at ", signalTime);
+         g_lastTradeSignalTime = signalTime;
+         return;
+        }
+
+      if(sellSignal && sellCount > 0)
+        {
+         Print("Trade skipped. SELL position already open before hedge for regime signal: ",
+               regimeName, " at ", signalTime);
+         g_lastTradeSignalTime = signalTime;
+         return;
+        }
+
+      CloseProfitableOppositePositionBeforeHedge(buySignal, sellSignal);
+     }
+   else
+     {
+      if(g_lastEntryType < 0)
+         g_lastEntryType = GetNewestManagedPositionType();
+
+      if(g_lastEntryType == desiredPositionType)
+        {
+         Print("Trade skipped. Hedged basket is waiting for opposite signal before another same-direction entry: ",
+               regimeName, " at ", signalTime);
+         g_lastTradeSignalTime = signalTime;
+         return;
+        }
+     }
+
    bool opened = false;
 
    if(buySignal)
@@ -614,7 +785,8 @@ void ProcessTradingSignal()
    if(opened)
      {
       g_lastTradeSignalTime = signalTime;
-      Print("Opened trade from regime signal: ", regimeName, " at ", signalTime);
+      g_lastEntryType = desiredPositionType;
+      Print("Opened hedge trade from regime signal: ", regimeName, " at ", signalTime);
      }
    else
      {
@@ -630,11 +802,7 @@ void ManageBreakEven()
    if(!InpEnableTrading || !InpEnableBreakEven)
       return;
 
-   if(!PositionSelect(_Symbol))
-      return;
-
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
+   if(CountManagedPositions() != 1)
       return;
 
    string timeframe = GetVal("timeframe", "");
@@ -644,33 +812,46 @@ void ManageBreakEven()
       return;
 
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   long positionType = PositionGetInteger(POSITION_TYPE);
-   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentSl = PositionGetDouble(POSITION_SL);
-   double currentTp = PositionGetDouble(POSITION_TP);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   if(positionType == POSITION_TYPE_BUY)
+   for(int positionIndex = PositionsTotal() - 1; positionIndex >= 0; positionIndex--)
      {
-      double trigger = entry + InpBreakEvenAtAtr * atr;
-      double newSl = NormalizeDouble(entry + InpBreakEvenPlusAtr * atr, digits);
+      ulong ticket = PositionGetTicket(positionIndex);
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
+         continue;
 
-      if(bid >= trigger && (currentSl == 0.0 || currentSl < newSl))
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(symbol != _Symbol || magic != InpMagicNumber)
+         continue;
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSl = PositionGetDouble(POSITION_SL);
+      double currentTp = PositionGetDouble(POSITION_TP);
+
+      if(positionType == POSITION_TYPE_BUY)
         {
-         if(!g_trade.PositionModify(_Symbol, newSl, currentTp))
-            Print("Failed to move BUY SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
+         double trigger = entry + InpBreakEvenAtAtr * atr;
+         double newSl = NormalizeDouble(entry + InpBreakEvenPlusAtr * atr, digits);
+
+         if(bid >= trigger && (currentSl == 0.0 || currentSl < newSl))
+           {
+            if(!g_trade.PositionModify(ticket, newSl, currentTp))
+               Print("Failed to move BUY SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
+           }
         }
-     }
-   else if(positionType == POSITION_TYPE_SELL)
-     {
-      double trigger = entry - InpBreakEvenAtAtr * atr;
-      double newSl = NormalizeDouble(entry - InpBreakEvenPlusAtr * atr, digits);
-
-      if(ask <= trigger && (currentSl == 0.0 || currentSl > newSl))
+      else if(positionType == POSITION_TYPE_SELL)
         {
-         if(!g_trade.PositionModify(_Symbol, newSl, currentTp))
-            Print("Failed to move SELL SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
+         double trigger = entry - InpBreakEvenAtAtr * atr;
+         double newSl = NormalizeDouble(entry - InpBreakEvenPlusAtr * atr, digits);
+
+         if(ask <= trigger && (currentSl == 0.0 || currentSl > newSl))
+           {
+            if(!g_trade.PositionModify(ticket, newSl, currentTp))
+               Print("Failed to move SELL SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
+           }
         }
      }
   }

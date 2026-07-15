@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            RegimeSignalPanel.mq5 |
+//|                                           backtest_2_EA.mq5       |
 //|   Reads a key=value regime-signal text file and displays it on   |
 //|   the chart as a clean, auto-refreshing info panel.              |
 //+------------------------------------------------------------------+
 #property copyright "Regime Signal Panel"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -25,11 +25,11 @@ input int              InpStaleMinutes    = 15;                  // Minutes befo
 input bool             InpEnableTrading   = true;                // Enable trading from signal
 input string           InpTradeStartTime  = "01:30";             // Earliest time to open trades
 input string           InpTradeEndTime    = "22:00";             // Latest time to open trades
-input double           InpLots            = 0.01;                // Fixed position size
+input double           InpLots            = 0.1;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
-input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
-input int              InpCloseAfterBars  = 60;                   // Close position after this many candles
+input double           InpStopLossAtr     = 12.0;                 // Stop loss in ATR multiples
+input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
 input bool             InpWaitForSignalCandleClose = true;       // Use signal one candle after CSV time
 input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
