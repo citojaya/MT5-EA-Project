@@ -7,8 +7,8 @@ from pathlib import Path
 # -------------------------------------------------
 # MT5 ML Pipeline
 # -------------------------------------------------
-symbol = "XAUUSD"
-timeframe = "M5"
+symbol = "GBPUSD"
+timeframe = "H1"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
