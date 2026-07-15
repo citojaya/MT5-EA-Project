@@ -21,10 +21,13 @@ input int              InpFontSize        = 10;                  // Font size
 input string           InpFontName        = "Consolas";           // Font name
 input int              InpStaleMinutes    = 15;                  // Minutes before data flagged stale
 input bool             InpEnableTrading   = true;                // Enable trading from signal
-input string           InpTradeStartTime  = "01:30";             // Earliest time to open trades
+input string           InpTradeStartTime  = "02:00";             // Earliest time to open trades
 input string           InpTradeEndTime    = "22:00";             // Latest time to open trades
-input double           InpLots            = 0.1;                // Fixed position size
+input double           InpLots            = 0.01;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
+input bool             InpUseAdxFilter    = true;                // Require minimum ADX for new trades
+input int              InpAdxPeriod       = 14;                  // ADX period
+input double           InpMinAdx          = 25.0;                // Minimum ADX for new trades
 input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
 input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
@@ -304,6 +307,32 @@ double GetAtrValue(ENUM_TIMEFRAMES timeframe)
   }
 
 //+------------------------------------------------------------------+
+//| Get latest ADX value                                              |
+//+------------------------------------------------------------------+
+double GetAdxValue(ENUM_TIMEFRAMES timeframe)
+  {
+   int handle = iADX(_Symbol, timeframe, InpAdxPeriod);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("Failed to create ADX handle. Error: ", GetLastError());
+      return 0.0;
+     }
+
+   double adxBuffer[];
+   ArraySetAsSeries(adxBuffer, true);
+
+   if(CopyBuffer(handle, 0, 0, 1, adxBuffer) != 1)
+     {
+      Print("Failed to read ADX buffer. Error: ", GetLastError());
+      IndicatorRelease(handle);
+      return 0.0;
+     }
+
+   IndicatorRelease(handle);
+   return adxBuffer[0];
+  }
+
+//+------------------------------------------------------------------+
 //| Check if this EA already has an open position on the chart symbol |
 //+------------------------------------------------------------------+
 bool HasManagedPosition()
@@ -421,6 +450,16 @@ void ProcessTradingSignal()
      }
 
    ENUM_TIMEFRAMES atrTimeframe = TimeframeFromString(timeframe);
+   double adx = GetAdxValue(atrTimeframe);
+   if(InpUseAdxFilter && adx < InpMinAdx)
+     {
+      Print("Trade skipped by ADX filter. ADX ", adx,
+            " is below minimum ", InpMinAdx,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
    double atr = GetAtrValue(atrTimeframe);
    if(atr <= 0.0)
       return;
@@ -447,7 +486,9 @@ void ProcessTradingSignal()
    if(opened)
      {
       g_lastTradeSignalTime = signalTime;
-      Print("Opened trade from regime signal: ", regimeName, " at ", signalTime);
+      Print("Opened trade from regime signal: ", regimeName,
+            ", ADX ", adx,
+            " at ", signalTime);
      }
    else
      {
@@ -566,7 +607,7 @@ void DrawPanel()
    int y       = InpYOffset;
    int lineH   = InpFontSize + 8;
    int panelW  = 300;
-   int panelH  = lineH * 9 + 14;
+   int panelH  = lineH * 10 + 14;
 
    SetBackground(PREFIX + "bg", x - 8, y - 8, panelW, panelH);
 
@@ -574,7 +615,7 @@ void DrawPanel()
      {
       SetLabel(PREFIX + "title", "REGIME SIGNAL - FILE ERROR", x, y, clrRed, InpFontSize + 1);
       SetLabel(PREFIX + "l1", g_lastErr, x, y + lineH, clrOrange);
-      for(int i = 2; i < 8; i++)
+      for(int i = 2; i < 9; i++)
          SetLabel(PREFIX + "l" + IntegerToString(i), "", x, y + lineH * i, clrGray);
       return;
      }
@@ -589,6 +630,8 @@ void DrawPanel()
    string updUtc      = GetVal("updated_utc", "-");
 
    double conf   = StringToDouble(confStr) * 100.0;
+   ENUM_TIMEFRAMES panelTimeframe = TimeframeFromString(tf);
+   double adx = GetAdxValue(panelTimeframe);
    color  regCol = RegimeColor(regimeName);
 
    // --- Freshness of the underlying data ---
@@ -612,8 +655,9 @@ void DrawPanel()
    SetLabel(PREFIX + "l2", "Close:       " + closeStr,                             x, y + lineH * i, clrWhite);  i++;
    SetLabel(PREFIX + "l3", "Regime:      #" + regimeNum + " " + regimeName,        x, y + lineH * i, regCol);    i++;
    SetLabel(PREFIX + "l4", "Confidence:  " + DoubleToString(conf, 2) + "%",        x, y + lineH * i, clrWhite);  i++;
-   SetLabel(PREFIX + "l5", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l6", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l7", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
+   SetLabel(PREFIX + "l5", "ADX:         " + DoubleToString(adx, 2) + " / min " + DoubleToString(InpMinAdx, 2), x, y + lineH * i, clrWhite); i++;
+   SetLabel(PREFIX + "l6", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l7", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l8", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
   }
 //+------------------------------------------------------------------+
