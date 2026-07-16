@@ -13,20 +13,20 @@ timeframe = "M5"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS = [
-   #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-14 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
-   #("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-14 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create features for whole history
+   #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
+   #("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create features for whole history
    #("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
    #("src/models/train_stage1_regime.py", symbol, timeframe, "live", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
-   ("src/backtest/backtest.py", symbol, timeframe, "2026-01-01", "2026-07-10 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
+   #("src/backtest/backtest.py", symbol, timeframe, "2026-07-12", "2026-07-16 23:59", "--rebuild-features", "--config-file", "config/mt5_config_ICM_DEMO.json"),
 
 
 
     #python src/data/dukascopy_download.py `--symbol XAUUSD `--timeframe M5 `--start 2024.01.01 `--end 2026.07.14 `--config-file config/mt5_config_ICM_DEMO.json
     #("src/data/extract_ohlc_data.py" ,symbol ,timeframe),
     #("src/backtest/backtest_line_by_line.py", symbol, timeframe, "--config-file", "config/mt5_config_ICM_DEMO.json")
-    #("src/visualization/compare_signal_regime_confidence.py",
-    #    "data/backtest/ICMarketsAU-Demo/US30_M5_backtest_signals.csv",
-    #    "data/backtest/ICMarketsAU-Demo/backtest_line_by_line_US30.csv")
+    ("src/visualization/compare_signal_regime_confidence.py",
+        "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/Common/Files/append_signal_XAUUSD_M5_live.csv",
+        "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/Common/Files/XAUUSD_M5_backtest_signals.csv")
 ]
 
 
