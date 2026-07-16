@@ -6,7 +6,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 
-DEFAULT_BARS = 2400
+DEFAULT_BARS = 2800
 DEFAULT_CONFIG = "config/mt5_config_ICM_DEMO.json"
 
 TIMEFRAME_MAP = {
@@ -78,8 +78,8 @@ def connect_mt5(login: int, server: str, password: str, terminal_path: str | Non
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
 
-def resolve_mt5_symbol(symbol: str, config_path: Path) -> str:
-    if config_path.name == "mt5_config.json" and not symbol.endswith(".a"):
+def resolve_mt5_symbol(symbol: str, server: str) -> str:
+    if "ICMarkets" in server and not symbol.endswith(".a"):
         return f"{symbol}.a"
     return symbol
 
@@ -139,7 +139,7 @@ def main():
         raise ValueError(f"Unsupported timeframe '{args.timeframe}'. Use one of: {valid_timeframes}")
 
     login, server, password, terminal_path = load_credentials(args)
-    mt5_symbol = resolve_mt5_symbol(symbol, Path(args.config))
+    mt5_symbol = resolve_mt5_symbol(symbol, server)
     output_file = Path(f"data/raw/ohlc_data_{symbol}.csv")
 
     connect_mt5(login, server, password, terminal_path)

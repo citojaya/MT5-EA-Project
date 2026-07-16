@@ -1,5 +1,4 @@
 import argparse
-from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -13,8 +12,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.signals.regime_signals import generate_regime_signals
 from src.data.history_paths import (
-    features_dir_for_config,
-    find_existing_history_file,
+    load_config,
     models_dir_for_config,
     raw_dir_for_config,
 )
@@ -33,54 +31,6 @@ def output_symbol_for_config(symbol: str, config_file: str) -> str:
     ) and not symbol.endswith(".a"):
         return f"{symbol}.a"
     return symbol
-
-
-def parse_raw_history_range(path: Path) -> tuple[datetime, datetime] | None:
-    parts = path.stem.rsplit("_", maxsplit=2)
-    if len(parts) != 3:
-        return None
-
-    try:
-        start = datetime.strptime(parts[1], "%Y%m%d")
-        end = datetime.strptime(parts[2], "%Y%m%d")
-    except ValueError:
-        return None
-
-    return start, end
-
-
-def find_raw_history_file_for_range(
-    search_dirs: list[Path],
-    symbol: str,
-    timeframe: str,
-    start: str,
-    end: str,
-) -> Path | None:
-    start_time = pd.to_datetime(start, utc=True).tz_localize(None)
-    end_time = pd.to_datetime(end, utc=True).tz_localize(None)
-    pattern = f"{symbol}_bidask_{timeframe}_*.csv"
-    containing_candidates = []
-    overlapping_candidates = []
-
-    for raw_dir in search_dirs:
-        for path in raw_dir.glob(pattern):
-            parsed_range = parse_raw_history_range(path)
-            if parsed_range is None:
-                continue
-
-            file_start, file_end = parsed_range
-            if file_start <= start_time and file_end >= end_time:
-                containing_candidates.append(path)
-            elif file_start <= end_time and file_end >= start_time:
-                overlapping_candidates.append(path)
-
-    if containing_candidates:
-        return sorted(containing_candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
-
-    if overlapping_candidates:
-        return sorted(overlapping_candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
-
-    return find_existing_history_file(search_dirs, symbol, timeframe)
 
 
 def load_model(model_file: Path, feature_columns_file: Path):
@@ -107,32 +57,6 @@ def filter_date_range(
         raise ValueError("start must be before or equal to end")
 
     return df[(df["time"] >= start_time) & (df["time"] <= end_time)].copy()
-
-
-def add_missing_regime_rank_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    if "atr_pct_rank" not in df.columns:
-        if "atr_pct" not in df.columns:
-            raise ValueError("Cannot create atr_pct_rank because atr_pct is missing")
-
-        df["atr_pct_rank"] = (
-            df["atr_pct"]
-            .rolling(window=500, min_periods=100)
-            .rank(pct=True)
-        )
-
-    if "bb_width_rank" not in df.columns:
-        if "bb_width" not in df.columns:
-            raise ValueError("Cannot create bb_width_rank because bb_width is missing")
-
-        df["bb_width_rank"] = (
-            df["bb_width"]
-            .rolling(window=500, min_periods=100)
-            .rank(pct=True)
-        )
-
-    return df.dropna()
 
 
 def select_raw_history(
@@ -171,9 +95,10 @@ def parse_args():
         help="Optional output CSV path. Defaults to MT5 Common Files/{symbol}_{timeframe}_backtest_signals.csv",
     )
     parser.add_argument(
-        "--rebuild-features",
-        action="store_true",
-        help="Rebuild and cache features from the raw OHLC CSV before backtesting",
+        "--input-file",
+        type=Path,
+        required=True,
+        help="IC Markets raw OHLC CSV used to build features in memory",
     )
     parser.add_argument(
         "--config-file",
@@ -189,41 +114,39 @@ def main():
     output_symbol = output_symbol_for_config(symbol, args.config_file)
     timeframe = args.timeframe.upper()
 
-    input_file = features_dir_for_config(args.config_file) / f"{symbol}_{timeframe}_features.csv"
+    cfg = load_config(args.config_file)
+    broker_raw_dir = raw_dir_for_config(args.config_file, cfg).resolve()
+    if "ICMarkets" not in broker_raw_dir.name:
+        raise ValueError(
+            f"Backtest requires an IC Markets config; resolved broker directory: {broker_raw_dir}"
+        )
+
+    raw_file = args.input_file
+    if not raw_file.is_absolute():
+        raw_file = ROOT_DIR / raw_file
+    raw_file = raw_file.resolve()
+    if not raw_file.is_relative_to(broker_raw_dir):
+        raise ValueError(
+            f"Input must be inside the IC Markets raw-data directory: {broker_raw_dir}"
+        )
+    if not raw_file.is_file():
+        raise FileNotFoundError(f"Raw history file not found: {raw_file}")
+
     model_dir = models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
-    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
+    model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
     output_file = (
         Path(args.output)
         if args.output
         else MT5_COMMON_FILES_DIR / f"{symbol}_{timeframe}_backtest_signals.csv"
     )
 
-    if args.rebuild_features:
-        raw_file = find_raw_history_file_for_range(
-            [raw_dir_for_config(args.config_file), Path("data/raw")],
-            symbol,
-            timeframe,
-            args.start,
-            args.end,
-        )
-        if raw_file is None:
-            raise RuntimeError(f"No raw history file found for {symbol} {timeframe}")
+    raw_data = pd.read_csv(raw_file)
+    raw_data = select_raw_history(raw_data, args.start, args.end)
+    if raw_data.empty:
+        raise RuntimeError("No raw IC Markets OHLC rows found for the selected date range")
 
-        raw_data = pd.read_csv(raw_file)
-        raw_data = select_raw_history(raw_data, args.start, args.end)
-        if raw_data.empty:
-            raise RuntimeError("No raw OHLC rows found for the selected date range")
-
-        features = build_features(raw_data)
-        input_file.parent.mkdir(parents=True, exist_ok=True)
-        features.to_csv(input_file, index=False)
-        print(f"Rebuilt features from: {raw_file} ({HISTORY_BARS}-bar history)")
-        print(f"Cached features to: {input_file}")
-    else:
-        features = pd.read_csv(input_file)
-
-    features = add_missing_regime_rank_features(features)
+    features = build_features(raw_data)
     features = filter_date_range(features, args.start, args.end)
 
     if features.empty:
@@ -241,6 +164,9 @@ def main():
     output_file.parent.mkdir(parents=True, exist_ok=True)
     signals.to_csv(output_file, index=False)
 
+    print(f"Raw IC Markets input: {raw_file}")
+    print("Features built in memory; no feature cache read or written.")
+    print("Stage 2 disabled; output contains Stage 1 regime predictions only.")
     print(f"Saved backtest signals to: {output_file}")
     print(f"Rows: {len(signals)}")
     print()

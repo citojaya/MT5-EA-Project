@@ -12,7 +12,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from src.features.build_features import build_features
-from src.data.history_paths import backtest_dir_for_config, models_dir_for_config
+from src.data.history_paths import (
+    backtest_dir_for_config,
+    load_config as load_mt5_config,
+    models_dir_for_config,
+)
 from src.signals.regime_signals import generate_regime_signals
 
 
@@ -43,6 +47,14 @@ def load_config(symbol: str, timeframe: str):
         "bars": DEFAULT_BARS,
     }
     return config
+
+
+def output_symbol_for_config(symbol: str, config_file: str) -> str:
+    mt5_config = load_mt5_config(config_file)
+    broker_name = str(mt5_config.get("broker") or mt5_config.get("server") or "")
+    if "ICMarkets" in broker_name and not symbol.endswith(".a"):
+        return f"{symbol}.a"
+    return symbol
 
 
 # -----------------------------
@@ -171,10 +183,10 @@ def main():
     )
 
     model_dir = ROOT_DIR / models_dir_for_config(args.config_file) / f"stage1_regime_{symbol}_{timeframe}"
-    model_file = model_dir / f"live_regime_model_{symbol}_{timeframe}.joblib"
-    feature_columns_file = model_dir / f"live_feature_columns_{symbol}_{timeframe}.json"
+    model_file = model_dir / f"backtest_regime_model_{symbol}_{timeframe}.joblib"
+    feature_columns_file = model_dir / f"backtest_feature_columns_{symbol}_{timeframe}.json"
 
-    config = load_config(symbol, timeframe)
+    config = load_config(output_symbol_for_config(symbol, args.config_file), timeframe)
     model, feature_columns = load_model(model_file, feature_columns_file)
 
     data = pd.read_csv(input_file)
@@ -189,6 +201,11 @@ def main():
         raise RuntimeError(f"Input file has {len(data)} rows, but {bars} rows are required")
 
     total_rows = len(data) - bars + 1
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    if output_file.exists():
+        output_file.unlink()
+        print(f"Deleted existing output file: {output_file}")
 
     for progress_index, row_index in enumerate(range(bars - 1, len(data)), start=1):
         try:
