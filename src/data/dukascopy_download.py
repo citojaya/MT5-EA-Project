@@ -1,17 +1,47 @@
 import argparse
 from pathlib import Path
+import sys
 
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from src.data.history_paths import load_config, raw_dir_for_config, raw_history_path
+
 
 DEFAULT_RAW_DIR = Path("data/raw/Dukascopy")
+DEFAULT_CONFIG_FILE = Path("config/mt5_config_ICM_DEMO.json")
 DEFAULT_SYMBOL = "XAUUSD"
 DEFAULT_TIMEFRAME = "M1"
-DEFAULT_DUKASCOPY_TIMEFRAME = "1 Min"
 DEFAULT_START = "2026.01.01"
 DEFAULT_END = "2026.06.30"
 DEFAULT_TIMEZONE = "Europe/Helsinki"
-DEFAULT_POINT = 0.01
+
+DUKASCOPY_TIMEFRAMES = {
+    "M1": "1 Min",
+    "M5": "5 Mins",
+    "M15": "15 Mins",
+    "M30": "30 Mins",
+    "H1": "1 Hour",
+    "H4": "4 Hours",
+    "D1": "1 Day",
+}
+
+# IC Markets symbol point sizes used to express spread in MT5 points.
+# Override with --point if the target account's symbol specification differs.
+DEFAULT_POINT_BY_SYMBOL = {
+    "XAUUSD": 0.01,
+    "US30": 0.01,
+    "GBPJPY": 0.001,
+    "USDJPY": 0.001,
+    "EURUSD": 0.00001,
+    "GBPUSD": 0.00001,
+    "AUDUSD": 0.00001,
+    "NZDUSD": 0.00001,
+    "USDCAD": 0.00001,
+}
 
 
 DUKASCOPY_COLUMNS = {
@@ -89,6 +119,22 @@ def combine_bid_ask(
     if merged.empty:
         raise ValueError("No common timestamps found between bid and ask files")
 
+    unmatched_bid = len(bid) - len(merged)
+    unmatched_ask = len(ask) - len(merged)
+    if unmatched_bid or unmatched_ask:
+        print(
+            "Warning: inner timestamp join discarded "
+            f"{unmatched_bid:,} Bid rows and {unmatched_ask:,} Ask rows"
+        )
+
+    negative_spread = merged["ask_close"] < merged["bid_close"]
+    if negative_spread.any():
+        first_bad_time = merged.loc[negative_spread, "time"].iloc[0]
+        raise ValueError(
+            f"Ask close is below Bid close in {negative_spread.sum():,} rows; "
+            f"first occurrence: {first_bad_time}"
+        )
+
     output = pd.DataFrame()
     output["time"] = merged["time"]
     output["open"] = merged["bid_open"]
@@ -106,17 +152,29 @@ def combine_bid_ask(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Combine Dukascopy bid/ask CSV files into an ML-ready OHLC CSV."
+        description=(
+            "Convert Dukascopy EET Bid/Ask candle CSV files into the same UTC "
+            "raw-history format used by the IC Markets MT5 pipeline."
+        )
     )
     parser.add_argument("--symbol", default=DEFAULT_SYMBOL)
     parser.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
-    parser.add_argument("--dukascopy-timeframe", default=DEFAULT_DUKASCOPY_TIMEFRAME)
+    parser.add_argument(
+        "--dukascopy-timeframe",
+        help="Text used in Dukascopy filenames; inferred from --timeframe when omitted",
+    )
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END)
     parser.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW_DIR)
     parser.add_argument("--ask-file", type=Path)
     parser.add_argument("--bid-file", type=Path)
     parser.add_argument("--output-file", type=Path)
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        default=DEFAULT_CONFIG_FILE,
+        help="IC Markets MT5 config used to choose the broker-specific output directory",
+    )
     parser.add_argument(
         "--timezone",
         default=DEFAULT_TIMEZONE,
@@ -125,8 +183,10 @@ def parse_args():
     parser.add_argument(
         "--point",
         type=float,
-        default=DEFAULT_POINT,
-        help="Symbol point size used to convert ask-bid price spread into spread points",
+        help=(
+            "IC Markets symbol point size used to convert ask-bid spread into MT5 points; "
+            "inferred for supported symbols when omitted"
+        ),
     )
     return parser.parse_args()
 
@@ -135,11 +195,21 @@ def main():
     args = parse_args()
     symbol = args.symbol.upper()
     timeframe = args.timeframe.upper()
+    dukascopy_timeframe = args.dukascopy_timeframe or DUKASCOPY_TIMEFRAMES.get(timeframe)
+    if dukascopy_timeframe is None:
+        valid = ", ".join(DUKASCOPY_TIMEFRAMES)
+        raise ValueError(f"Unsupported timeframe '{timeframe}'. Use one of: {valid}")
+
+    point = args.point or DEFAULT_POINT_BY_SYMBOL.get(symbol)
+    if point is None or point <= 0:
+        raise ValueError(
+            f"No valid IC Markets point size configured for {symbol}; pass --point explicitly"
+        )
 
     ask_file = args.ask_file or default_dukascopy_file(
         args.raw_dir,
         symbol,
-        args.dukascopy_timeframe,
+        dukascopy_timeframe,
         "Ask",
         args.start,
         args.end,
@@ -147,25 +217,32 @@ def main():
     bid_file = args.bid_file or default_dukascopy_file(
         args.raw_dir,
         symbol,
-        args.dukascopy_timeframe,
+        dukascopy_timeframe,
         "Bid",
         args.start,
         args.end,
     )
-    output_file = args.output_file or (
-        args.raw_dir
-        / f"{symbol}_bidask_{timeframe}_{date_token(args.start)}_{date_token(args.end)}.csv"
+    cfg = load_config(args.config_file)
+    ic_markets_raw_dir = raw_dir_for_config(args.config_file, cfg)
+    output_file = args.output_file or raw_history_path(
+        ic_markets_raw_dir,
+        symbol,
+        timeframe,
+        date_token(args.start),
+        date_token(args.end),
     )
 
     ask = load_dukascopy_file(ask_file, "ask", args.timezone)
     bid = load_dukascopy_file(bid_file, "bid", args.timezone)
-    combined = combine_bid_ask(bid, ask, args.point)
+    combined = combine_bid_ask(bid, ask, point)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(output_file, index=False)
 
     print(f"Ask file: {ask_file}")
     print(f"Bid file: {bid_file}")
+    print(f"Source timezone: {args.timezone} -> UTC")
+    print(f"IC Markets point size: {point}")
     print(f"Saved: {output_file}")
     print(f"Rows: {len(combined):,}")
     print(f"Time range: {combined['time'].min()} to {combined['time'].max()}")

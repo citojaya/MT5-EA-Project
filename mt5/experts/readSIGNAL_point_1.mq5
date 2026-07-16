@@ -21,16 +21,19 @@ input int              InpFontSize        = 10;                  // Font size
 input string           InpFontName        = "Consolas";           // Font name
 input int              InpStaleMinutes    = 15;                  // Minutes before data flagged stale
 input bool             InpEnableTrading   = true;                // Enable trading from signal
-input string           InpTradeStartTime  = "01:30";             // Earliest time to open trades
+input string           InpTradeStartTime  = "02:00";             // Earliest time to open trades
 input string           InpTradeEndTime    = "22:00";             // Latest time to open trades
 input double           InpLots            = 0.1;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
-input double           InpTakeProfitAtr   = 6.0;                 // Take profit in ATR multiples
+input bool             InpUseAdxFilter    = true;                // Require minimum ADX for new trades
+input int              InpAdxPeriod       = 14;                  // ADX period
+input double           InpMinAdx          = 25.0;                // Minimum ADX for new trades
+input double           InpTakeProfitAtr   = 9.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
 input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
-input double           InpBreakEvenAtAtr  = 2.5;                 // Move SL after profit reaches ATR multiple
-input double           InpBreakEvenPlusAtr= 0.2;                 // Break-even offset in ATR multiples
+input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
+input double           InpBreakEvenPlusAtr= 0.4;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
 
 #define PREFIX  "RSP_"
@@ -103,6 +106,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   //ManageAdxExit();
    ManageBreakEven();
    ManageCandleExit();
   }
@@ -280,7 +284,7 @@ bool IsWithinTradeTime()
 //+------------------------------------------------------------------+
 //| Get latest ATR value                                              |
 //+------------------------------------------------------------------+
-double GetAtrValue(ENUM_TIMEFRAMES timeframe)
+double GetAtrValue(ENUM_TIMEFRAMES timeframe, int bufferShift = 0)
   {
    int handle = iATR(_Symbol, timeframe, InpAtrPeriod);
    if(handle == INVALID_HANDLE)
@@ -292,7 +296,7 @@ double GetAtrValue(ENUM_TIMEFRAMES timeframe)
    double atrBuffer[];
    ArraySetAsSeries(atrBuffer, true);
 
-   if(CopyBuffer(handle, 0, 0, 1, atrBuffer) != 1)
+   if(CopyBuffer(handle, 0, bufferShift, 1, atrBuffer) != 1)
      {
       Print("Failed to read ATR buffer. Error: ", GetLastError());
       IndicatorRelease(handle);
@@ -301,6 +305,76 @@ double GetAtrValue(ENUM_TIMEFRAMES timeframe)
 
    IndicatorRelease(handle);
    return atrBuffer[0];
+  }
+
+//+------------------------------------------------------------------+
+//| Get latest ADX value                                              |
+//+------------------------------------------------------------------+
+bool TryGetAdxValue(ENUM_TIMEFRAMES timeframe, double &adx, int bufferShift = 0)
+  {
+   int handle = iADX(_Symbol, timeframe, InpAdxPeriod);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("Failed to create ADX handle. Error: ", GetLastError());
+      return false;
+     }
+
+   double adxBuffer[];
+   ArraySetAsSeries(adxBuffer, true);
+
+   if(CopyBuffer(handle, 0, bufferShift, 1, adxBuffer) != 1)
+     {
+      Print("Failed to read ADX buffer. Error: ", GetLastError());
+      IndicatorRelease(handle);
+      return false;
+     }
+
+   IndicatorRelease(handle);
+   adx = adxBuffer[0];
+   return true;
+  }
+
+double GetAdxValue(ENUM_TIMEFRAMES timeframe, int bufferShift = 0)
+  {
+   double adx = 0.0;
+   TryGetAdxValue(timeframe, adx, bufferShift);
+   return adx;
+  }
+
+//+------------------------------------------------------------------+
+//| Read the fast and slow EMA values used by the entry filter        |
+//+------------------------------------------------------------------+
+bool TryGetEntryEmaValues(ENUM_TIMEFRAMES timeframe, double &ema9, double &ema21)
+  {
+   int ema9Handle = iMA(_Symbol, timeframe, 9, 0, MODE_EMA, PRICE_CLOSE);
+   int ema21Handle = iMA(_Symbol, timeframe, 21, 0, MODE_EMA, PRICE_CLOSE);
+
+   if(ema9Handle == INVALID_HANDLE || ema21Handle == INVALID_HANDLE)
+     {
+      Print("Failed to create EMA handles. Error: ", GetLastError());
+      if(ema9Handle != INVALID_HANDLE)
+         IndicatorRelease(ema9Handle);
+      if(ema21Handle != INVALID_HANDLE)
+         IndicatorRelease(ema21Handle);
+      return false;
+     }
+
+   double ema9Buffer[];
+   double ema21Buffer[];
+   if(CopyBuffer(ema9Handle, 0, 1, 1, ema9Buffer) != 1 ||
+      CopyBuffer(ema21Handle, 0, 1, 1, ema21Buffer) != 1)
+     {
+      Print("Failed to read EMA buffers. Error: ", GetLastError());
+      IndicatorRelease(ema9Handle);
+      IndicatorRelease(ema21Handle);
+      return false;
+     }
+
+   ema9 = ema9Buffer[0];
+   ema21 = ema21Buffer[0];
+   IndicatorRelease(ema9Handle);
+   IndicatorRelease(ema21Handle);
+   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -332,6 +406,25 @@ void CloseManagedPosition(string reason)
    else
       Print("Failed to close managed position. Reason: ", reason,
             ". Retcode: ", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
+  }
+
+//+------------------------------------------------------------------+
+//| Close this EA's position when ADX falls below the entry minimum   |
+//+------------------------------------------------------------------+
+void ManageAdxExit()
+  {
+   if(!InpEnableTrading || !InpUseAdxFilter || !HasManagedPosition())
+      return;
+
+   ENUM_TIMEFRAMES timeframe = TimeframeFromString(GetVal("timeframe", ""));
+   double adx = 0.0;
+   if(!TryGetAdxValue(timeframe, adx) || adx >= InpMinAdx)
+      return;
+
+   CloseManagedPosition(
+      "ADX " + DoubleToString(adx, 2) +
+      " below minimum " + DoubleToString(InpMinAdx, 2)
+   );
   }
 
 //+------------------------------------------------------------------+
@@ -421,7 +514,32 @@ void ProcessTradingSignal()
      }
 
    ENUM_TIMEFRAMES atrTimeframe = TimeframeFromString(timeframe);
-   double atr = GetAtrValue(atrTimeframe);
+   double adx = GetAdxValue(atrTimeframe, 1);
+   if(InpUseAdxFilter && adx < InpMinAdx)
+     {
+      Print("Trade skipped by ADX filter. ADX ", adx,
+            " is below minimum ", InpMinAdx,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
+   double ema9 = 0.0;
+   double ema21 = 0.0;
+   if(!TryGetEntryEmaValues(atrTimeframe, ema9, ema21))
+      return;
+
+   if((buySignal && ema9 <= ema21) || (sellSignal && ema9 >= ema21))
+     {
+      Print("Trade skipped by EMA filter. EMA(9) ", ema9,
+            buySignal ? " must be above " : " must be below ",
+            "EMA(21) ", ema21,
+            " for regime signal: ", regimeName, " at ", signalTime);
+      g_lastTradeSignalTime = signalTime;
+      return;
+     }
+
+   double atr = GetAtrValue(atrTimeframe, 1);
    if(atr <= 0.0)
       return;
 
@@ -447,7 +565,9 @@ void ProcessTradingSignal()
    if(opened)
      {
       g_lastTradeSignalTime = signalTime;
-      Print("Opened trade from regime signal: ", regimeName, " at ", signalTime);
+      Print("Opened trade from regime signal: ", regimeName,
+            ", ADX ", adx,
+            " at ", signalTime);
      }
    else
      {
@@ -565,8 +685,8 @@ void DrawPanel()
    int x       = InpXOffset;
    int y       = InpYOffset;
    int lineH   = InpFontSize + 8;
-   int panelW  = 300;
-   int panelH  = lineH * 9 + 14;
+   int panelW  = 360;
+   int panelH  = lineH * 10 + 14;
 
    SetBackground(PREFIX + "bg", x - 8, y - 8, panelW, panelH);
 
@@ -574,7 +694,7 @@ void DrawPanel()
      {
       SetLabel(PREFIX + "title", "REGIME SIGNAL - FILE ERROR", x, y, clrRed, InpFontSize + 1);
       SetLabel(PREFIX + "l1", g_lastErr, x, y + lineH, clrOrange);
-      for(int i = 2; i < 8; i++)
+      for(int i = 2; i < 10; i++)
          SetLabel(PREFIX + "l" + IntegerToString(i), "", x, y + lineH * i, clrGray);
       return;
      }
@@ -589,6 +709,23 @@ void DrawPanel()
    string updUtc      = GetVal("updated_utc", "-");
 
    double conf   = StringToDouble(confStr) * 100.0;
+   ENUM_TIMEFRAMES panelTimeframe = TimeframeFromString(tf);
+   double adx = GetAdxValue(panelTimeframe, 1);
+   double ema9 = 0.0;
+   double ema21 = 0.0;
+   bool emaAvailable = TryGetEntryEmaValues(panelTimeframe, ema9, ema21);
+   string regimeLower = regimeName;
+   StringToLower(regimeLower);
+   bool buySignal = StringFind(regimeLower, "strong bull") >= 0;
+   bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
+   bool emaPass = (buySignal && ema9 > ema21) || (sellSignal && ema9 < ema21);
+   string emaRelation = !emaAvailable ? "unavailable" :
+                        DoubleToString(ema9, 2) + (ema9 > ema21 ? " > " : (ema9 < ema21 ? " < " : " = ")) +
+                        DoubleToString(ema21, 2);
+   string emaStatus = (buySignal || sellSignal) ? (emaPass ? "PASS" : "FAIL") : "N/A";
+   color emaCol = !emaAvailable ? clrOrange :
+                  ((!buySignal && !sellSignal) ? clrSilver :
+                  (emaPass ? clrLimeGreen : clrRed));
    color  regCol = RegimeColor(regimeName);
 
    // --- Freshness of the underlying data ---
@@ -612,8 +749,10 @@ void DrawPanel()
    SetLabel(PREFIX + "l2", "Close:       " + closeStr,                             x, y + lineH * i, clrWhite);  i++;
    SetLabel(PREFIX + "l3", "Regime:      #" + regimeNum + " " + regimeName,        x, y + lineH * i, regCol);    i++;
    SetLabel(PREFIX + "l4", "Confidence:  " + DoubleToString(conf, 2) + "%",        x, y + lineH * i, clrWhite);  i++;
-   SetLabel(PREFIX + "l5", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l6", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l7", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
+   SetLabel(PREFIX + "l5", "ADX:         " + DoubleToString(adx, 2) + " / min " + DoubleToString(InpMinAdx, 2), x, y + lineH * i, clrWhite); i++;
+   SetLabel(PREFIX + "l6", "EMA(9/21):   " + emaRelation + "  [" + emaStatus + "]", x, y + lineH * i, emaCol); i++;
+   SetLabel(PREFIX + "l7", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l8", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l9", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
   }
 //+------------------------------------------------------------------+

@@ -11,11 +11,9 @@
 #include <Trade/Trade.mqh>
 
 //--- Inputs ----------------------------------------------------------
-input string           InpFileName        = "XAUUSD_M5_backtest_signals.csv"; // File name
-input bool             InpUseCommonFolder = true;               // Read from Common Files (MQL5\..\Common\Files)
-input bool             InpUseTimer        = false;               // Process signals on timer instead of ticks
+input string           InpFileName        = "latest_regime_XAUUSD_M1.txt"; // File name
+input bool             InpUseCommonFolder = false;                // Read from Common Files (MQL5\..\Common\Files)
 input int              InpRefreshSeconds  = 5;                   // Refresh interval (seconds)
-input bool             InpShowPanel       = true;                // Draw chart panel
 input ENUM_BASE_CORNER InpCorner          = CORNER_LEFT_UPPER;   // Panel corner
 input int              InpXOffset         = 15;                  // X offset (px)
 input int              InpYOffset         = 15;                  // Y offset (px)
@@ -23,7 +21,7 @@ input int              InpFontSize        = 10;                  // Font size
 input string           InpFontName        = "Consolas";           // Font name
 input int              InpStaleMinutes    = 15;                  // Minutes before data flagged stale
 input bool             InpEnableTrading   = true;                // Enable trading from signal
-input string           InpTradeStartTime  = "01:30";             // Earliest time to open trades
+input string           InpTradeStartTime  = "02:00";             // Earliest time to open trades
 input string           InpTradeEndTime    = "22:00";             // Latest time to open trades
 input double           InpLots            = 0.01;                // Fixed position size
 input int              InpAtrPeriod       = 14;                  // ATR period
@@ -32,12 +30,8 @@ input int              InpAdxPeriod       = 14;                  // ADX period
 input double           InpMinAdx          = 25.0;                // Minimum ADX for new trades
 input double           InpTakeProfitAtr   = 9.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
-input int              InpCloseAfterBars  = 60;                   // Close position after this many candles
+input int              InpCloseAfterBars  = 5;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.60;             // Minimum confidence for new trades
-input bool             InpUseStage2Filter = false;                // Require stage 2 trade approval
-input double           InpMinStage2Confidence = 0.55;            // Minimum stage 2 favorable probability
-input bool             InpWaitForSignalCandleClose = true;       // Use signal one candle after CSV time
-input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
 input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
 input double           InpBreakEvenPlusAtr= 0.4;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
@@ -53,34 +47,50 @@ bool   g_fileOk  = false;
 string g_lastErr = "";
 CTrade g_trade;
 string g_lastTradeSignalTime = "";
-bool   g_signalsLoaded = false;
-datetime g_signalTimes[];
-string g_signalTimeText[];
-string g_signalSymbols[];
-string g_signalTimeframes[];
-string g_signalClose[];
-string g_signalRegimes[];
-string g_signalRegimeNames[];
-string g_signalConfidence[];
-string g_signalUpdatedUtc[];
-string g_signalStage2Signals[];
-string g_signalStage2Confidence[];
-int    g_selectedSignalIndex = -1;
-int    g_atrHandle = INVALID_HANDLE;
-ENUM_TIMEFRAMES g_atrTimeframe = PERIOD_CURRENT;
-int    g_adxHandle = INVALID_HANDLE;
-ENUM_TIMEFRAMES g_adxTimeframe = PERIOD_CURRENT;
-double g_latestAdx = 0.0;
+
+//+------------------------------------------------------------------+
+//| Convert chart symbol to signal-file symbol                        |
+//+------------------------------------------------------------------+
+string ChartSignalSymbol()
+  {
+   string symbol = _Symbol;
+   int suffixPos = StringFind(symbol, ".a");
+   if(suffixPos >= 0)
+      symbol = StringSubstr(symbol, 0, suffixPos);
+   return symbol;
+  }
+
+//+------------------------------------------------------------------+
+//| Convert chart timeframe to signal-file timeframe text             |
+//+------------------------------------------------------------------+
+string ChartTimeframeString()
+  {
+   ENUM_TIMEFRAMES period = (ENUM_TIMEFRAMES)_Period;
+
+   if(period == PERIOD_M1)  return "M1";
+   if(period == PERIOD_M5)  return "M5";
+   if(period == PERIOD_M15) return "M15";
+   if(period == PERIOD_M30) return "M30";
+   if(period == PERIOD_H1)  return "H1";
+   if(period == PERIOD_H4)  return "H4";
+   if(period == PERIOD_D1)  return "D1";
+
+   return EnumToString(period);
+  }
+
+//+------------------------------------------------------------------+
+//| Build the live signal file name from the chart symbol/timeframe   |
+//+------------------------------------------------------------------+
+string ChartSignalFileName()
+  {
+   return "latest_regime_" + ChartSignalSymbol() + "_" + ChartTimeframeString() + ".txt";
+  }
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagicNumber);
-   g_signalsLoaded = LoadSignalCsv(InpFileName, InpUseCommonFolder);
-   if(!g_signalsLoaded)
-      Print(g_lastErr);
-   if(InpUseTimer)
-      EventSetTimer(MathMax(1, InpRefreshSeconds));
+   EventSetTimer(MathMax(1, InpRefreshSeconds));
    ReadAndDisplay();
    return(INIT_SUCCEEDED);
   }
@@ -88,12 +98,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   if(InpUseTimer)
-      EventKillTimer();
-   if(g_atrHandle != INVALID_HANDLE)
-      IndicatorRelease(g_atrHandle);
-   if(g_adxHandle != INVALID_HANDLE)
-      IndicatorRelease(g_adxHandle);
+   EventKillTimer();
    ObjectsDeleteAll(0, PREFIX);
    ChartRedraw();
   }
@@ -101,9 +106,6 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   if(!InpUseTimer)
-      ReadAndDisplay();
-
    //ManageAdxExit();
    ManageBreakEven();
    ManageCandleExit();
@@ -120,86 +122,20 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void ReadAndDisplay()
   {
-   g_fileOk = SelectSignalForTesterTime();
+   string filename = ChartSignalFileName();
+   g_fileOk = ReadKeyValueFile(filename, InpUseCommonFolder);
+   DrawPanel();
    ProcessTradingSignal();
-   if(InpShowPanel)
-     {
-      DrawPanel();
-      ChartRedraw();
-     }
+   ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
-//| Store one key/value pair                                          |
+//| Parse a "key=value" per line text file into g_keys/g_vals         |
 //+------------------------------------------------------------------+
-void SetKeyValue(string key, string val)
+bool ReadKeyValueFile(string filename, bool commonFolder)
   {
-   StringTrimLeft(key);  StringTrimRight(key);
-   StringTrimLeft(val);  StringTrimRight(val);
+   g_count = 0;
 
-   if(StringLen(key) == 0 || g_count >= MAX_KV)
-      return;
-
-   g_keys[g_count] = key;
-   g_vals[g_count] = val;
-   g_count++;
-  }
-
-//+------------------------------------------------------------------+
-//| Split one CSV/TSV line                                            |
-//+------------------------------------------------------------------+
-int SplitSignalLine(string line, string &fields[])
-  {
-   StringTrimLeft(line);
-   StringTrimRight(line);
-
-   ushort delimiter = StringGetCharacter(",", 0);
-   if(StringFind(line, "\t") >= 0)
-      delimiter = StringGetCharacter("\t", 0);
-
-   return StringSplit(line, delimiter, fields);
-  }
-
-//+------------------------------------------------------------------+
-//| Store one CSV signal row in memory                                |
-//+------------------------------------------------------------------+
-void AppendSignalRow(string &fields[])
-  {
-   datetime signalTime = ParseUtcDateTime(fields[0]);
-   if(signalTime <= 0)
-      return;
-
-   int rowIndex = ArraySize(g_signalTimes);
-   ArrayResize(g_signalTimes, rowIndex + 1, 10000);
-   ArrayResize(g_signalTimeText, rowIndex + 1, 10000);
-   ArrayResize(g_signalSymbols, rowIndex + 1, 10000);
-   ArrayResize(g_signalTimeframes, rowIndex + 1, 10000);
-   ArrayResize(g_signalClose, rowIndex + 1, 10000);
-   ArrayResize(g_signalRegimes, rowIndex + 1, 10000);
-   ArrayResize(g_signalRegimeNames, rowIndex + 1, 10000);
-   ArrayResize(g_signalConfidence, rowIndex + 1, 10000);
-   ArrayResize(g_signalUpdatedUtc, rowIndex + 1, 10000);
-   ArrayResize(g_signalStage2Signals, rowIndex + 1, 10000);
-   ArrayResize(g_signalStage2Confidence, rowIndex + 1, 10000);
-
-   g_signalTimes[rowIndex] = signalTime;
-   g_signalTimeText[rowIndex] = fields[0];
-   g_signalSymbols[rowIndex] = fields[1];
-   g_signalTimeframes[rowIndex] = fields[2];
-   g_signalClose[rowIndex] = fields[3];
-   g_signalRegimes[rowIndex] = fields[4];
-   g_signalRegimeNames[rowIndex] = fields[5];
-   g_signalConfidence[rowIndex] = fields[6];
-   g_signalUpdatedUtc[rowIndex] = fields[7];
-   g_signalStage2Signals[rowIndex] = ArraySize(fields) > 8 ? fields[8] : "0";
-   g_signalStage2Confidence[rowIndex] = ArraySize(fields) > 9 ? fields[9] : "0";
-  }
-
-//+------------------------------------------------------------------+
-//| Read signal CSV/TSV once                                          |
-//+------------------------------------------------------------------+
-bool LoadSignalCsv(string filename, bool commonFolder)
-  {
    int flags = FILE_READ | FILE_TXT | FILE_ANSI;
    if(commonFolder)
       flags |= FILE_COMMON;
@@ -211,7 +147,7 @@ bool LoadSignalCsv(string filename, bool commonFolder)
       return false;
      }
 
-   while(!FileIsEnding(handle))
+   while(!FileIsEnding(handle) && g_count < MAX_KV)
      {
       string line = FileReadString(handle);
       StringTrimLeft(line);
@@ -219,99 +155,21 @@ bool LoadSignalCsv(string filename, bool commonFolder)
       if(StringLen(line) == 0)
          continue;
 
-      string fields[];
-      int fieldCount = SplitSignalLine(line, fields);
-      if(fieldCount < 8)
+      int pos = StringFind(line, "=");
+      if(pos <= 0)
          continue;
 
-      string firstField = fields[0];
-      StringToLower(firstField);
-      if(firstField == "time")
-         continue;
+      string key = StringSubstr(line, 0, pos);
+      string val = StringSubstr(line, pos + 1);
+      StringTrimLeft(key);  StringTrimRight(key);
+      StringTrimLeft(val);  StringTrimRight(val);
 
-      AppendSignalRow(fields);
+      g_keys[g_count] = key;
+      g_vals[g_count] = val;
+      g_count++;
      }
 
    FileClose(handle);
-
-   if(ArraySize(g_signalTimes) == 0)
-     {
-      g_lastErr = "No signal rows loaded from file: " + filename;
-      return false;
-     }
-
-   g_lastErr = "";
-   g_selectedSignalIndex = -1;
-   return true;
-  }
-
-//+------------------------------------------------------------------+
-//| Time when a loaded signal row is safe to use in tester            |
-//+------------------------------------------------------------------+
-datetime SignalReadyTime(int signalIndex)
-  {
-   datetime signalTime = g_signalTimes[signalIndex];
-   if(!InpWaitForSignalCandleClose)
-      return signalTime;
-
-   ENUM_TIMEFRAMES signalTimeframe = TimeframeFromString(g_signalTimeframes[signalIndex]);
-   int timeframeSeconds = PeriodSeconds(signalTimeframe);
-   if(timeframeSeconds <= 0)
-      timeframeSeconds = PeriodSeconds(_Period);
-
-   return signalTime + timeframeSeconds;
-  }
-
-//+------------------------------------------------------------------+
-//| Select latest loaded signal row once its candle has completed     |
-//+------------------------------------------------------------------+
-bool SelectSignalForTesterTime()
-  {
-   if(!g_signalsLoaded)
-      return false;
-
-   datetime testerTime = TimeCurrent();
-   int signalCount = ArraySize(g_signalTimes);
-   int previousIndex = g_selectedSignalIndex;
-
-   if(g_selectedSignalIndex >= 0 && SignalReadyTime(g_selectedSignalIndex) > testerTime)
-      g_selectedSignalIndex = -1;
-
-   int nextIndex = g_selectedSignalIndex + 1;
-   while(nextIndex < signalCount && SignalReadyTime(nextIndex) <= testerTime)
-     {
-      g_selectedSignalIndex = nextIndex;
-      nextIndex++;
-     }
-
-   if(g_selectedSignalIndex < 0)
-     {
-      g_lastErr = "No ready signal row found at/before tester time: " + TimeToString(testerTime, TIME_DATE | TIME_MINUTES);
-      return false;
-     }
-
-   if(g_selectedSignalIndex == previousIndex && g_count > 0)
-      return true;
-
-   g_count = 0;
-   for(int kvIndex = 0; kvIndex < MAX_KV; kvIndex++)
-     {
-      g_keys[kvIndex] = "";
-      g_vals[kvIndex] = "";
-     }
-
-   SetKeyValue("time",        g_signalTimeText[g_selectedSignalIndex]);
-   SetKeyValue("symbol",      g_signalSymbols[g_selectedSignalIndex]);
-   SetKeyValue("timeframe",   g_signalTimeframes[g_selectedSignalIndex]);
-   SetKeyValue("close",       g_signalClose[g_selectedSignalIndex]);
-   SetKeyValue("regime",      g_signalRegimes[g_selectedSignalIndex]);
-   SetKeyValue("regime_name", g_signalRegimeNames[g_selectedSignalIndex]);
-   SetKeyValue("confidence",  g_signalConfidence[g_selectedSignalIndex]);
-   SetKeyValue("updated_utc", g_signalUpdatedUtc[g_selectedSignalIndex]);
-   SetKeyValue("stage2_signal", g_signalStage2Signals[g_selectedSignalIndex]);
-   SetKeyValue("stage2_confidence", g_signalStage2Confidence[g_selectedSignalIndex]);
-   SetKeyValue("stage2_probability", g_signalStage2Confidence[g_selectedSignalIndex]);
-
    g_lastErr = "";
    return true;
   }
@@ -404,7 +262,7 @@ int TimeTextToMinutes(string timeText)
   }
 
 //+------------------------------------------------------------------+
-//| Check whether new trades are allowed at the current tester time   |
+//| Check whether new trades are allowed at the current server time   |
 //+------------------------------------------------------------------+
 bool IsWithinTradeTime()
   {
@@ -428,30 +286,24 @@ bool IsWithinTradeTime()
 //+------------------------------------------------------------------+
 double GetAtrValue(ENUM_TIMEFRAMES timeframe, int bufferShift = 0)
   {
-   if(g_atrHandle == INVALID_HANDLE || g_atrTimeframe != timeframe)
+   int handle = iATR(_Symbol, timeframe, InpAtrPeriod);
+   if(handle == INVALID_HANDLE)
      {
-      if(g_atrHandle != INVALID_HANDLE)
-         IndicatorRelease(g_atrHandle);
-
-      g_atrHandle = iATR(_Symbol, timeframe, InpAtrPeriod);
-      g_atrTimeframe = timeframe;
-
-      if(g_atrHandle == INVALID_HANDLE)
-        {
-         Print("Failed to create ATR handle. Error: ", GetLastError());
-         return 0.0;
-        }
+      Print("Failed to create ATR handle. Error: ", GetLastError());
+      return 0.0;
      }
 
    double atrBuffer[];
    ArraySetAsSeries(atrBuffer, true);
 
-   if(CopyBuffer(g_atrHandle, 0, bufferShift, 1, atrBuffer) != 1)
+   if(CopyBuffer(handle, 0, bufferShift, 1, atrBuffer) != 1)
      {
       Print("Failed to read ATR buffer. Error: ", GetLastError());
+      IndicatorRelease(handle);
       return 0.0;
      }
 
+   IndicatorRelease(handle);
    return atrBuffer[0];
   }
 
@@ -460,32 +312,25 @@ double GetAtrValue(ENUM_TIMEFRAMES timeframe, int bufferShift = 0)
 //+------------------------------------------------------------------+
 bool TryGetAdxValue(ENUM_TIMEFRAMES timeframe, double &adx, int bufferShift = 0)
   {
-   if(g_adxHandle == INVALID_HANDLE || g_adxTimeframe != timeframe)
+   int handle = iADX(_Symbol, timeframe, InpAdxPeriod);
+   if(handle == INVALID_HANDLE)
      {
-      if(g_adxHandle != INVALID_HANDLE)
-         IndicatorRelease(g_adxHandle);
-
-      g_adxHandle = iADX(_Symbol, timeframe, InpAdxPeriod);
-      g_adxTimeframe = timeframe;
-
-      if(g_adxHandle == INVALID_HANDLE)
-        {
-         Print("Failed to create ADX handle. Error: ", GetLastError());
-         return false;
-        }
+      Print("Failed to create ADX handle. Error: ", GetLastError());
+      return false;
      }
 
    double adxBuffer[];
    ArraySetAsSeries(adxBuffer, true);
 
-   if(CopyBuffer(g_adxHandle, 0, bufferShift, 1, adxBuffer) != 1)
+   if(CopyBuffer(handle, 0, bufferShift, 1, adxBuffer) != 1)
      {
       Print("Failed to read ADX buffer. Error: ", GetLastError());
+      IndicatorRelease(handle);
       return false;
      }
 
-   g_latestAdx = adxBuffer[0];
-   adx = g_latestAdx;
+   IndicatorRelease(handle);
+   adx = adxBuffer[0];
    return true;
   }
 
@@ -556,10 +401,11 @@ void CloseManagedPosition(string reason)
    if(magic != InpMagicNumber)
       return;
 
-   if(!g_trade.PositionClose(_Symbol))
-      Print("Failed to close position: ", reason, ". Retcode: ", g_trade.ResultRetcodeDescription());
+   if(g_trade.PositionClose(_Symbol))
+      Print("Closed managed position: ", reason);
    else
-      Print("Closed position: ", reason);
+      Print("Failed to close managed position. Reason: ", reason,
+            ". Retcode: ", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
   }
 
 //+------------------------------------------------------------------+
@@ -579,38 +425,6 @@ void ManageAdxExit()
       "ADX " + DoubleToString(adx, 2) +
       " below minimum " + DoubleToString(InpMinAdx, 2)
    );
-  }
-
-//+------------------------------------------------------------------+
-//| Close managed position when the current regime no longer supports |
-//| its direction                                                     |
-//+------------------------------------------------------------------+
-bool ClosePositionOnRegimeChange(string regime, string signalTime)
-  {
-   if(!PositionSelect(_Symbol))
-      return false;
-
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
-      return false;
-
-   long positionType = PositionGetInteger(POSITION_TYPE);
-
-   if(positionType == POSITION_TYPE_BUY && regime == "7")
-     {
-      //CloseManagedPosition("BUY closed because regime is no longer 0. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
-     }
-
-   if(positionType == POSITION_TYPE_SELL && regime == "7")
-     {
-      //CloseManagedPosition("SELL closed because regime is no longer 2. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
-     }
-
-   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -651,14 +465,11 @@ void ProcessTradingSignal()
 
    string signalSymbol = GetVal("symbol", "");
    string timeframe    = GetVal("timeframe", "");
-   string regime       = GetVal("regime", "");
    string regimeName   = GetVal("regime_name", "");
    string confidenceStr= GetVal("confidence", "");
-   string stage2Signal = GetVal("stage2_signal", "0");
-   string stage2ConfidenceStr = GetVal("stage2_confidence", "0");
    string signalTime   = GetVal("time", "");
 
-   if(signalSymbol != _Symbol)
+   if(signalSymbol != ChartSignalSymbol())
       return;
 
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
@@ -667,12 +478,9 @@ void ProcessTradingSignal()
    string regimeLower = regimeName;
    StringToLower(regimeLower);
 
-   if(ClosePositionOnRegimeChange(regime, signalTime))
-      return;
-
    if(StringFind(regimeLower, "transition") >= 0)
      {
-      //CloseManagedPosition("Transition regime");
+      CloseManagedPosition("Transition regime");
       g_lastTradeSignalTime = signalTime;
       return;
      }
@@ -682,8 +490,8 @@ void ProcessTradingSignal()
    if(HasManagedPosition())
       return;
 
-   bool buySignal  = (regime == "0");
-   bool sellSignal = (regime == "2");
+   bool buySignal  = StringFind(regimeLower, "strong bull") >= 0;
+   bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
 
    if(!buySignal && !sellSignal)
       return;
@@ -700,17 +508,6 @@ void ProcessTradingSignal()
    if(confidence < InpMinTradeConfidence)
      {
       Print("Trade skipped. Confidence ", confidence, " is below minimum ", InpMinTradeConfidence,
-            " for regime signal: ", regimeName, " at ", signalTime);
-      g_lastTradeSignalTime = signalTime;
-      return;
-     }
-
-   double stage2Confidence = StringToDouble(stage2ConfidenceStr);
-   if(InpUseStage2Filter && (stage2Signal != "1" || stage2Confidence < InpMinStage2Confidence))
-     {
-      Print("Trade skipped by stage 2. Stage2 signal ", stage2Signal,
-            ", confidence ", stage2Confidence,
-            ", minimum ", InpMinStage2Confidence,
             " for regime signal: ", regimeName, " at ", signalTime);
       g_lastTradeSignalTime = signalTime;
       return;
@@ -769,8 +566,6 @@ void ProcessTradingSignal()
      {
       g_lastTradeSignalTime = signalTime;
       Print("Opened trade from regime signal: ", regimeName,
-            ", stage2 signal ", stage2Signal,
-            ", stage2 confidence ", stage2Confidence,
             ", ADX ", adx,
             " at ", signalTime);
      }
@@ -785,7 +580,7 @@ void ProcessTradingSignal()
 //+------------------------------------------------------------------+
 void ManageBreakEven()
   {
-   if(!InpEnableTrading || !InpEnableBreakEven)
+   if(!InpEnableTrading)
       return;
 
    if(!PositionSelect(_Symbol))
@@ -891,7 +686,7 @@ void DrawPanel()
    int y       = InpYOffset;
    int lineH   = InpFontSize + 8;
    int panelW  = 360;
-   int panelH  = lineH * 11 + 14;
+   int panelH  = lineH * 10 + 14;
 
    SetBackground(PREFIX + "bg", x - 8, y - 8, panelW, panelH);
 
@@ -899,7 +694,7 @@ void DrawPanel()
      {
       SetLabel(PREFIX + "title", "REGIME SIGNAL - FILE ERROR", x, y, clrRed, InpFontSize + 1);
       SetLabel(PREFIX + "l1", g_lastErr, x, y + lineH, clrOrange);
-      for(int i = 2; i < 11; i++)
+      for(int i = 2; i < 10; i++)
          SetLabel(PREFIX + "l" + IntegerToString(i), "", x, y + lineH * i, clrGray);
       return;
      }
@@ -910,30 +705,30 @@ void DrawPanel()
    string regimeNum   = GetVal("regime",      "-");
    string regimeName  = GetVal("regime_name", "-");
    string confStr     = GetVal("confidence",  "-");
-   string stage2Signal= GetVal("stage2_signal", "-");
-   string stage2ConfStr = GetVal("stage2_confidence", "-");
    string sigTime     = GetVal("time",        "-");
    string updUtc      = GetVal("updated_utc", "-");
 
    double conf   = StringToDouble(confStr) * 100.0;
-   double stage2Conf = StringToDouble(stage2ConfStr) * 100.0;
    ENUM_TIMEFRAMES panelTimeframe = TimeframeFromString(tf);
    double adx = GetAdxValue(panelTimeframe, 1);
    double ema9 = 0.0;
    double ema21 = 0.0;
    bool emaAvailable = TryGetEntryEmaValues(panelTimeframe, ema9, ema21);
-   bool emaPass = (regimeNum == "0" && ema9 > ema21) ||
-                  (regimeNum == "2" && ema9 < ema21);
+   string regimeLower = regimeName;
+   StringToLower(regimeLower);
+   bool buySignal = StringFind(regimeLower, "strong bull") >= 0;
+   bool sellSignal = StringFind(regimeLower, "strong bear") >= 0;
+   bool emaPass = (buySignal && ema9 > ema21) || (sellSignal && ema9 < ema21);
    string emaRelation = !emaAvailable ? "unavailable" :
                         DoubleToString(ema9, 2) + (ema9 > ema21 ? " > " : (ema9 < ema21 ? " < " : " = ")) +
                         DoubleToString(ema21, 2);
-   string emaStatus = (regimeNum == "0" || regimeNum == "2") ?
-                      (emaPass ? "PASS" : "FAIL") : "N/A";
+   string emaStatus = (buySignal || sellSignal) ? (emaPass ? "PASS" : "FAIL") : "N/A";
    color emaCol = !emaAvailable ? clrOrange :
-                  ((regimeNum != "0" && regimeNum != "2") ? clrSilver :
+                  ((!buySignal && !sellSignal) ? clrSilver :
                   (emaPass ? clrLimeGreen : clrRed));
    color  regCol = RegimeColor(regimeName);
 
+   // --- Freshness of the underlying data ---
    datetime updDt  = ParseUtcDateTime(updUtc);
    datetime nowUtc = TimeGMT();
    color freshCol  = clrLimeGreen;
@@ -954,11 +749,10 @@ void DrawPanel()
    SetLabel(PREFIX + "l2", "Close:       " + closeStr,                             x, y + lineH * i, clrWhite);  i++;
    SetLabel(PREFIX + "l3", "Regime:      #" + regimeNum + " " + regimeName,        x, y + lineH * i, regCol);    i++;
    SetLabel(PREFIX + "l4", "Confidence:  " + DoubleToString(conf, 2) + "%",        x, y + lineH * i, clrWhite);  i++;
-   SetLabel(PREFIX + "l5", "Stage2:      " + stage2Signal + " / " + DoubleToString(stage2Conf, 2) + "%", x, y + lineH * i, clrWhite); i++;
-   SetLabel(PREFIX + "l6", "ADX:         " + DoubleToString(adx, 2) + " / min " + DoubleToString(InpMinAdx, 2), x, y + lineH * i, clrWhite); i++;
-   SetLabel(PREFIX + "l7", "EMA(9/21):   " + emaRelation + "  [" + emaStatus + "]", x, y + lineH * i, emaCol); i++;
-   SetLabel(PREFIX + "l8", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l9", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
-   SetLabel(PREFIX + "l10", "Data Age:    " + ageText,                             x, y + lineH * i, freshCol);  i++;
+   SetLabel(PREFIX + "l5", "ADX:         " + DoubleToString(adx, 2) + " / min " + DoubleToString(InpMinAdx, 2), x, y + lineH * i, clrWhite); i++;
+   SetLabel(PREFIX + "l6", "EMA(9/21):   " + emaRelation + "  [" + emaStatus + "]", x, y + lineH * i, emaCol); i++;
+   SetLabel(PREFIX + "l7", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l8", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
+   SetLabel(PREFIX + "l9", "Data Age:    " + ageText,                              x, y + lineH * i, freshCol);  i++;
   }
 //+------------------------------------------------------------------+
