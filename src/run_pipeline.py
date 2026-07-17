@@ -14,22 +14,30 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 RAW_INPUT_FILE = (
-        Path("data/raw/ICMarketsAU-Demo") / f"{symbol}_bidask_{timeframe}_20250101_20260716.csv"
+        Path("data/raw/ICMarketsAU-Demo") / f"{symbol}_bidask_{timeframe}_20200101_20260716.csv"
 )
 
 
 SCRIPTS = [
-   #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
-   #("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create features for whole history
-   #("src/labels/create_regime_labels.py", symbol, timeframe, "2026-01-01", "2026-07-11 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
-   #("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2026-01-11", "2026-07-02 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
-   #("src/backtest/backtest.py",symbol,timeframe,"2026-07-12","2026-07-16 23:59","--input-file",str(RAW_INPUT_FILE),"--config-file","config/mt5_config_ICM_DEMO.json"),
-   ("src/data/extract_ohlc_data.py",symbol,timeframe,"--config","config/mt5_config_ICM_DEMO.json"),
-   ("src/backtest/backtest_line_by_line.py",symbol,timeframe,"--input-file",f"data/raw/ohlc_data_{symbol}.csv","--config-file","config/mt5_config_ICM_DEMO.json"),
+   #("src/data/download_history.py", symbol, timeframe, "2020-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
+   #("src/features/build_features.py", symbol, timeframe, "2020-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create features for whole history
+   #("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
+   #("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
+   ("src/backtest/backtest.py",symbol,timeframe,"2026-01-01","2026-07-16 23:59","--input-file",str(RAW_INPUT_FILE),"--config-file","config/mt5_config_ICM_DEMO.json"),
+   
+   #("src/data/extract_ohlc_data.py",symbol,timeframe,"--config","config/mt5_config_ICM_DEMO.json"),
+   #("src/backtest/backtest_line_by_line.py",symbol,timeframe,"--input-file",f"data/raw/ohlc_data_{symbol}.csv","--config-file","config/mt5_config_ICM_DEMO.json"),
 
+    # Compare signal regime
     #("src/visualization/compare_signal_regime_confidence.py",
     #    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/Common/Files/backtest_line_by_line_XAUUSD.csv",
     #    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/Common/Files/XAUUSD_M5_backtest_signals.csv")
+
+    # Compare OHLC files
+    #("src/visualization/compare_ohlc_files.py","data/raw/ICMarketsAU-Demo/XAUUSD_bidask_M5_20250101_20260716.csv","data/raw/ICMarketsAU-Demo/XAUUSD_bidask_M5_20250101_20260716_dukascopy.csv")
+
+    # Combine bid,ask files downloaded from Dukascopy using JForex platform
+    #("src/data/dukascopy_download.py","--symbol", "XAUUSD","--timeframe", "M5","--start", "2020.01.01","--end", "2026.07.16","--config-file", "config/mt5_config_ICM_DEMO.json")
 ]
 
 

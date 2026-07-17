@@ -6,7 +6,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 
-DEFAULT_BARS = 2800
+DEFAULT_BARS = 200000
 DEFAULT_CONFIG = "config/mt5_config_ICM_DEMO.json"
 
 TIMEFRAME_MAP = {

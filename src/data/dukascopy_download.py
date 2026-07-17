@@ -224,13 +224,17 @@ def main():
     )
     cfg = load_config(args.config_file)
     ic_markets_raw_dir = raw_dir_for_config(args.config_file, cfg)
-    output_file = args.output_file or raw_history_path(
+    default_output_file = raw_history_path(
         ic_markets_raw_dir,
         symbol,
         timeframe,
         date_token(args.start),
         date_token(args.end),
     )
+    default_output_file = default_output_file.with_name(
+        f"{default_output_file.stem}_dukascopy{default_output_file.suffix}"
+    )
+    output_file = args.output_file or default_output_file
 
     ask = load_dukascopy_file(ask_file, "ask", args.timezone)
     bid = load_dukascopy_file(bid_file, "bid", args.timezone)
