@@ -25,10 +25,10 @@ config_file = "config/mt5_config_ICM_DEMO.json"
 #config_file = "config/mt5_config_FXV_DEMO.json"
 
 SCRIPTS = [
-   #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # download complete history
-   #("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # create features for whole history
-   #("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-06-30 23:59", "--config-file", config_file), # create labels only witihin training date range
-   #("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2025-01-01", "2025-06-30 23:59", "--config-file", config_file),
+   ("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # download complete history
+   ("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # create features for whole history
+   ("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-06-30 23:59", "--config-file", config_file), # create labels only witihin training date range
+   ("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2025-01-01", "2025-06-30 23:59", "--config-file", config_file),
    ("src/backtest/backtest.py",symbol,timeframe,"2025-08-01","2026-07-17 23:59","--input-file",str(RAW_INPUT_FILE),"--config-file",config_file),
    
    #("src/data/extract_ohlc_data.py",symbol,timeframe,"--config",config_file),

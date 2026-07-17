@@ -598,24 +598,44 @@ bool ClosePositionOnRegimeChange(string regime, string signalTime)
 
    if(positionType == POSITION_TYPE_BUY)
      {
-      if(regime == "0" || regime == "1")
+      bool supportsBuy = (regime == "0" ||   // Strong Bull Trend
+                          regime == "1" ||   // Weak Bull Trend
+                          regime == "7");    // Transition
+      if(supportsBuy)
+        {
+         if(regime == "7")
+           {
+            g_lastTradeSignalTime = signalTime;
+            return true;
+           }
          return false;
+        }
 
-      if(regime != "7")
-         CloseManagedPosition("BUY closed because regime is no longer weak/strong bull. Signal regime: " + regime);
-
+      CloseManagedPosition(
+         "BUY closed because regime changed outside Transition/Strong Bull/Weak Bull. Signal regime: " + regime
+      );
       g_lastTradeSignalTime = signalTime;
       return true;
      }
 
    if(positionType == POSITION_TYPE_SELL)
      {
-      if(regime == "2" || regime == "3")
+      bool supportsSell = (regime == "2" ||  // Strong Bear Trend
+                           regime == "3" ||  // Weak Bear Trend
+                           regime == "7");   // Transition
+      if(supportsSell)
+        {
+         if(regime == "7")
+           {
+            g_lastTradeSignalTime = signalTime;
+            return true;
+           }
          return false;
+        }
 
-      if(regime != "7")
-         CloseManagedPosition("SELL closed because regime is no longer weak/strong bear. Signal regime: " + regime);
-
+      CloseManagedPosition(
+         "SELL closed because regime changed outside Transition/Strong Bear/Weak Bear. Signal regime: " + regime
+      );
       g_lastTradeSignalTime = signalTime;
       return true;
      }
