@@ -14,19 +14,23 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 RAW_INPUT_FILE = (
-        Path("data/raw/ICMarketsAU-Demo") / f"{symbol}_bidask_{timeframe}_20200101_20260716.csv"
+        #Path("data/raw/DUKASCOPY-Demo") / f"{symbol}_bidask_{timeframe}_20200101_20260716.csv"
+        Path("data/raw/Dukascopy-demo-mt5-1") / f"{symbol}_bidask_{timeframe}_20250101_20260717.csv"
+        
 )
 
+config_file = "config/mt5_config_DUKAS_DEMO.json"
+#config_file = "config/mt5_config_ICM_DEMO.json"
 
 SCRIPTS = [
-   #("src/data/download_history.py", symbol, timeframe, "2020-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # download complete history
-   #("src/features/build_features.py", symbol, timeframe, "2020-01-01", "2026-07-16 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create features for whole history
-   #("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"), # create labels only witihin training date range
-   #("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2025-01-01", "2025-12-30 23:59", "--config-file", "config/mt5_config_ICM_DEMO.json"),
-   ("src/backtest/backtest.py",symbol,timeframe,"2026-01-01","2026-07-16 23:59","--input-file",str(RAW_INPUT_FILE),"--config-file","config/mt5_config_ICM_DEMO.json"),
+   #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # download complete history
+   #("src/features/build_features.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # create features for whole history
+   #("src/labels/create_regime_labels.py", symbol, timeframe, "2025-01-01", "2025-06-30 23:59", "--config-file", config_file), # create labels only witihin training date range
+   #("src/models/train_stage1_regime.py", symbol, timeframe, "backtest", "2025-01-01", "2025-06-30 23:59", "--config-file", config_file),
+   ("src/backtest/backtest.py",symbol,timeframe,"2025-08-01","2026-07-17 23:59","--input-file",str(RAW_INPUT_FILE),"--config-file",config_file),
    
-   #("src/data/extract_ohlc_data.py",symbol,timeframe,"--config","config/mt5_config_ICM_DEMO.json"),
-   #("src/backtest/backtest_line_by_line.py",symbol,timeframe,"--input-file",f"data/raw/ohlc_data_{symbol}.csv","--config-file","config/mt5_config_ICM_DEMO.json"),
+   #("src/data/extract_ohlc_data.py",symbol,timeframe,"--config",config_file),
+   #("src/backtest/backtest_line_by_line.py",symbol,timeframe,"--input-file",f"data/raw/ohlc_data_{symbol}.csv","--config-file",config_file),
 
     # Compare signal regime
     #("src/visualization/compare_signal_regime_confidence.py",

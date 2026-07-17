@@ -98,7 +98,7 @@ def parse_args():
         "--input-file",
         type=Path,
         required=True,
-        help="IC Markets raw OHLC CSV used to build features in memory",
+        help="Raw OHLC CSV for the configured MT5 broker, used to build features in memory",
     )
     parser.add_argument(
         "--config-file",
@@ -116,10 +116,6 @@ def main():
 
     cfg = load_config(args.config_file)
     broker_raw_dir = raw_dir_for_config(args.config_file, cfg).resolve()
-    if "ICMarkets" not in broker_raw_dir.name:
-        raise ValueError(
-            f"Backtest requires an IC Markets config; resolved broker directory: {broker_raw_dir}"
-        )
 
     raw_file = args.input_file
     if not raw_file.is_absolute():
@@ -127,7 +123,7 @@ def main():
     raw_file = raw_file.resolve()
     if not raw_file.is_relative_to(broker_raw_dir):
         raise ValueError(
-            f"Input must be inside the IC Markets raw-data directory: {broker_raw_dir}"
+            f"Input must be inside the configured broker's raw-data directory: {broker_raw_dir}"
         )
     if not raw_file.is_file():
         raise FileNotFoundError(f"Raw history file not found: {raw_file}")
@@ -144,7 +140,7 @@ def main():
     raw_data = pd.read_csv(raw_file)
     raw_data = select_raw_history(raw_data, args.start, args.end)
     if raw_data.empty:
-        raise RuntimeError("No raw IC Markets OHLC rows found for the selected date range")
+        raise RuntimeError("No raw OHLC rows found for the selected date range")
 
     features = build_features(raw_data)
     features = filter_date_range(features, args.start, args.end)
@@ -164,7 +160,7 @@ def main():
     output_file.parent.mkdir(parents=True, exist_ok=True)
     signals.to_csv(output_file, index=False)
 
-    print(f"Raw IC Markets input: {raw_file}")
+    print(f"Raw broker input: {raw_file}")
     print("Features built in memory; no feature cache read or written.")
     print("Stage 2 disabled; output contains Stage 1 regime predictions only.")
     print(f"Saved backtest signals to: {output_file}")
