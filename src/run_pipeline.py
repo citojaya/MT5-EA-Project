@@ -15,12 +15,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 RAW_INPUT_FILE = (
         #Path("data/raw/DUKASCOPY-Demo") / f"{symbol}_bidask_{timeframe}_20200101_20260716.csv"
-        Path("data/raw/Dukascopy-demo-mt5-1") / f"{symbol}_bidask_{timeframe}_20250101_20260717.csv"
+        #Path("data/raw/Dukascopy-demo-mt5-1") / f"{symbol}_bidask_{timeframe}_20250101_20260717.csv"
+        Path("data/raw/ICMarketsAU-Demo") / f"{symbol}_bidask_{timeframe}_20250101_20260717.csv"
         
 )
 
-config_file = "config/mt5_config_DUKAS_DEMO.json"
-#config_file = "config/mt5_config_ICM_DEMO.json"
+#config_file = "config/mt5_config_DUKAS_DEMO.json"
+config_file = "config/mt5_config_ICM_DEMO.json"
+#config_file = "config/mt5_config_FXV_DEMO.json"
 
 SCRIPTS = [
    #("src/data/download_history.py", symbol, timeframe, "2025-01-01", "2026-07-17 23:59", "--config-file", config_file), # download complete history
