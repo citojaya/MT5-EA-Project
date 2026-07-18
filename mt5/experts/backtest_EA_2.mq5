@@ -32,14 +32,10 @@ input int              InpAdxPeriod       = 14;                  // ADX period
 input double           InpMinAdx          = 25.0;                // Minimum ADX for new trades
 input double           InpTakeProfitAtr   = 9.0;                 // Take profit in ATR multiples
 input double           InpStopLossAtr     = 6.0;                 // Stop loss in ATR multiples
-input int              InpCloseAfterBars  = 6000;                   // Close position after this many candles
 input double           InpMinTradeConfidence = 0.95;             // Minimum confidence for new trades
 input bool             InpUseStage2Filter = false;                // Require stage 2 trade approval
 input double           InpMinStage2Confidence = 0.55;            // Minimum stage 2 favorable probability
 input bool             InpWaitForSignalCandleClose = true;       // Use signal one candle after CSV time
-input bool             InpEnableBreakEven = true;                // Enable break-even stop movement
-input double           InpBreakEvenAtAtr  = 3.0;                 // Move SL after profit reaches ATR multiple
-input double           InpBreakEvenPlusAtr= 0.4;                 // Break-even offset in ATR multiples
 input ulong            InpMagicNumber     = 26070601;            // Magic number
 
 #define PREFIX  "RSP_"
@@ -104,9 +100,7 @@ void OnTick()
    if(!InpUseTimer)
       ReadAndDisplay();
 
-   ManageAdxExit();
-   ManageBreakEven();
-   ManageCandleExit();
+   ManageH1OpenExit();
   }
 
 //+------------------------------------------------------------------+
@@ -497,39 +491,11 @@ double GetAdxValue(ENUM_TIMEFRAMES timeframe, int bufferShift = 0)
   }
 
 //+------------------------------------------------------------------+
-//| Read the fast and slow EMA values used by the entry filter        |
+//| Return the opening price of the current H1 candle                 |
 //+------------------------------------------------------------------+
-bool TryGetEntryEmaValues(ENUM_TIMEFRAMES timeframe, double &ema9, double &ema21)
+double GetCurrentH1Open()
   {
-   int ema9Handle = iMA(_Symbol, timeframe, 9, 0, MODE_EMA, PRICE_CLOSE);
-   int ema21Handle = iMA(_Symbol, timeframe, 21, 0, MODE_EMA, PRICE_CLOSE);
-
-   if(ema9Handle == INVALID_HANDLE || ema21Handle == INVALID_HANDLE)
-     {
-      Print("Failed to create EMA handles. Error: ", GetLastError());
-      if(ema9Handle != INVALID_HANDLE)
-         IndicatorRelease(ema9Handle);
-      if(ema21Handle != INVALID_HANDLE)
-         IndicatorRelease(ema21Handle);
-      return false;
-     }
-
-   double ema9Buffer[];
-   double ema21Buffer[];
-   if(CopyBuffer(ema9Handle, 0, 1, 1, ema9Buffer) != 1 ||
-      CopyBuffer(ema21Handle, 0, 1, 1, ema21Buffer) != 1)
-     {
-      Print("Failed to read EMA buffers. Error: ", GetLastError());
-      IndicatorRelease(ema9Handle);
-      IndicatorRelease(ema21Handle);
-      return false;
-     }
-
-   ema9 = ema9Buffer[0];
-   ema21 = ema21Buffer[0];
-   IndicatorRelease(ema9Handle);
-   IndicatorRelease(ema21Handle);
-   return true;
+   return iOpen(_Symbol, PERIOD_H1, 0);
   }
 
 //+------------------------------------------------------------------+
@@ -563,82 +529,27 @@ void CloseManagedPosition(string reason)
   }
 
 //+------------------------------------------------------------------+
-//| Close this EA's position when ADX falls below the entry minimum   |
+//| Close when price crosses the current H1 candle open               |
 //+------------------------------------------------------------------+
-void ManageAdxExit()
+void ManageH1OpenExit()
   {
-   if(!InpEnableTrading || !InpUseAdxFilter || !HasManagedPosition())
+   if(!InpEnableTrading || !PositionSelect(_Symbol))
       return;
-
-   ENUM_TIMEFRAMES timeframe = TimeframeFromString(GetVal("timeframe", ""));
-   double adx = 0.0;
-   if(!TryGetAdxValue(timeframe, adx) || adx >= InpMinAdx)
-      return;
-
-   CloseManagedPosition(
-      "ADX " + DoubleToString(adx, 2) +
-      " below minimum " + DoubleToString(InpMinAdx, 2)
-   );
-  }
-
-//+------------------------------------------------------------------+
-//| Close managed position when the current regime no longer supports |
-//| its direction                                                     |
-//+------------------------------------------------------------------+
-bool ClosePositionOnRegimeChange(string regime, string signalTime)
-  {
-   if(!PositionSelect(_Symbol))
-      return false;
 
    ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
    if(magic != InpMagicNumber)
-      return false;
+      return;
 
+   double h1Open = GetCurrentH1Open();
+   if(h1Open <= 0.0)
+      return;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    long positionType = PositionGetInteger(POSITION_TYPE);
 
-   if(positionType == POSITION_TYPE_BUY && regime == "7")
-     {
-      CloseManagedPosition("BUY closed because regime is no longer 0. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
-     }
-
-   if(positionType == POSITION_TYPE_SELL && regime == "7")
-     {
-      CloseManagedPosition("SELL closed because regime is no longer 2. Signal regime: " + regime);
-      g_lastTradeSignalTime = signalTime;
-      return true;
-     }
-
-   return false;
-  }
-
-//+------------------------------------------------------------------+
-//| Close this EA's position after the configured candle count        |
-//+------------------------------------------------------------------+
-void ManageCandleExit()
-  {
-   if(!InpEnableTrading || InpCloseAfterBars <= 0)
-      return;
-
-   if(!PositionSelect(_Symbol))
-      return;
-
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
-      return;
-
-   string timeframe = GetVal("timeframe", "");
-   ENUM_TIMEFRAMES exitTimeframe = TimeframeFromString(timeframe);
-   datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-   int barsSinceOpen = iBarShift(_Symbol, exitTimeframe, openTime, false);
-
-   if(barsSinceOpen < InpCloseAfterBars)
-      return;
-
-   CloseManagedPosition(
-      "Time exit after " + IntegerToString(InpCloseAfterBars) + " candles"
-   );
+   if(positionType == POSITION_TYPE_BUY && bid < h1Open)
+      CloseManagedPosition("BUY closed below current H1 candle open");
+   else if(positionType == POSITION_TYPE_SELL && bid > h1Open)
+      CloseManagedPosition("SELL closed above current H1 candle open");
   }
 
 //+------------------------------------------------------------------+
@@ -663,21 +574,6 @@ void ProcessTradingSignal()
 
    if(signalTime == "" || signalTime == g_lastTradeSignalTime)
       return;
-
-   string regimeLower = regimeName;
-   StringToLower(regimeLower);
-
-   if(ClosePositionOnRegimeChange(regime, signalTime))
-      return;
-
-   if(StringFind(regimeLower, "transition") >= 0)
-     {
-      CloseManagedPosition("Transition regime");
-      g_lastTradeSignalTime = signalTime;
-      return;
-     }
-
-   ManageBreakEven();
 
    if(HasManagedPosition())
       return;
@@ -727,16 +623,17 @@ void ProcessTradingSignal()
       return;
      }
 
-   double ema9 = 0.0;
-   double ema21 = 0.0;
-   if(!TryGetEntryEmaValues(PERIOD_H1, ema9, ema21))
+   double h1Open = GetCurrentH1Open();
+   if(h1Open <= 0.0)
       return;
 
-   if((buySignal && ema9 <= ema21) || (sellSignal && ema9 >= ema21))
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if((buySignal && bid <= h1Open) || (sellSignal && bid >= h1Open))
      {
-      Print("Trade skipped by EMA filter. EMA(9) ", ema9,
+      Print("Trade skipped by H1 candle filter. Current price ", bid,
             buySignal ? " must be above " : " must be below ",
-            "EMA(21) ", ema21,
+            "current H1 open ", h1Open,
             " for regime signal: ", regimeName, " at ", signalTime);
       g_lastTradeSignalTime = signalTime;
       return;
@@ -747,9 +644,6 @@ void ProcessTradingSignal()
       return;
 
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
    bool opened = false;
 
    if(buySignal)
@@ -777,59 +671,6 @@ void ProcessTradingSignal()
    else
      {
       Print("Trade open failed. Retcode: ", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Move stop loss to break-even plus offset after ATR profit         |
-//+------------------------------------------------------------------+
-void ManageBreakEven()
-  {
-   if(!InpEnableTrading || !InpEnableBreakEven)
-      return;
-
-   if(!PositionSelect(_Symbol))
-      return;
-
-   ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
-   if(magic != InpMagicNumber)
-      return;
-
-   string timeframe = GetVal("timeframe", "");
-   ENUM_TIMEFRAMES atrTimeframe = TimeframeFromString(timeframe);
-   double atr = GetAtrValue(atrTimeframe);
-   if(atr <= 0.0)
-      return;
-
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   long positionType = PositionGetInteger(POSITION_TYPE);
-   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentSl = PositionGetDouble(POSITION_SL);
-   double currentTp = PositionGetDouble(POSITION_TP);
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-   if(positionType == POSITION_TYPE_BUY)
-     {
-      double trigger = entry + InpBreakEvenAtAtr * atr;
-      double newSl = NormalizeDouble(entry + InpBreakEvenPlusAtr * atr, digits);
-
-      if(bid >= trigger && (currentSl == 0.0 || currentSl < newSl))
-        {
-         if(!g_trade.PositionModify(_Symbol, newSl, currentTp))
-            Print("Failed to move BUY SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
-        }
-     }
-   else if(positionType == POSITION_TYPE_SELL)
-     {
-      double trigger = entry - InpBreakEvenAtAtr * atr;
-      double newSl = NormalizeDouble(entry - InpBreakEvenPlusAtr * atr, digits);
-
-      if(ask <= trigger && (currentSl == 0.0 || currentSl > newSl))
-        {
-         if(!g_trade.PositionModify(_Symbol, newSl, currentTp))
-            Print("Failed to move SELL SL to break-even. Retcode: ", g_trade.ResultRetcodeDescription());
-        }
      }
   }
 
@@ -919,19 +760,20 @@ void DrawPanel()
    double stage2Conf = StringToDouble(stage2ConfStr) * 100.0;
    ENUM_TIMEFRAMES panelTimeframe = TimeframeFromString(tf);
    double adx = GetAdxValue(panelTimeframe, 1);
-   double ema9 = 0.0;
-   double ema21 = 0.0;
-   bool emaAvailable = TryGetEntryEmaValues(PERIOD_H1, ema9, ema21);
-   bool emaPass = (regimeNum == "0" && ema9 > ema21) ||
-                  (regimeNum == "2" && ema9 < ema21);
-   string emaRelation = !emaAvailable ? "unavailable" :
-                        DoubleToString(ema9, 2) + (ema9 > ema21 ? " > " : (ema9 < ema21 ? " < " : " = ")) +
-                        DoubleToString(ema21, 2);
-   string emaStatus = (regimeNum == "0" || regimeNum == "2") ?
-                      (emaPass ? "PASS" : "FAIL") : "N/A";
-   color emaCol = !emaAvailable ? clrOrange :
-                  ((regimeNum != "0" && regimeNum != "2") ? clrSilver :
-                  (emaPass ? clrLimeGreen : clrRed));
+   double h1Open = GetCurrentH1Open();
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool h1Available = h1Open > 0.0;
+   bool h1Pass = (regimeNum == "0" && currentPrice > h1Open) ||
+                 (regimeNum == "2" && currentPrice < h1Open);
+   string h1Relation = !h1Available ? "unavailable" :
+                       DoubleToString(currentPrice, _Digits) +
+                       (currentPrice > h1Open ? " > " : (currentPrice < h1Open ? " < " : " = ")) +
+                       DoubleToString(h1Open, _Digits);
+   string h1Status = (regimeNum == "0" || regimeNum == "2") ?
+                     (h1Pass ? "PASS" : "FAIL") : "N/A";
+   color h1Col = !h1Available ? clrOrange :
+                 ((regimeNum != "0" && regimeNum != "2") ? clrSilver :
+                 (h1Pass ? clrLimeGreen : clrRed));
    color  regCol = RegimeColor(regimeName);
 
    datetime updDt  = ParseUtcDateTime(updUtc);
@@ -956,7 +798,7 @@ void DrawPanel()
    SetLabel(PREFIX + "l4", "Confidence:  " + DoubleToString(conf, 2) + "%",        x, y + lineH * i, clrWhite);  i++;
    SetLabel(PREFIX + "l5", "Stage2:      " + stage2Signal + " / " + DoubleToString(stage2Conf, 2) + "%", x, y + lineH * i, clrWhite); i++;
    SetLabel(PREFIX + "l6", "ADX:         " + DoubleToString(adx, 2) + " / min " + DoubleToString(InpMinAdx, 2), x, y + lineH * i, clrWhite); i++;
-   SetLabel(PREFIX + "l7", "EMA H1(9/21):" + emaRelation + "  [" + emaStatus + "]", x, y + lineH * i, emaCol); i++;
+   SetLabel(PREFIX + "l7", "Price/H1 open:" + h1Relation + "  [" + h1Status + "]", x, y + lineH * i, h1Col); i++;
    SetLabel(PREFIX + "l8", "Signal Time: " + sigTime,                              x, y + lineH * i, clrSilver); i++;
    SetLabel(PREFIX + "l9", "Updated UTC: " + updUtc,                               x, y + lineH * i, clrSilver); i++;
    SetLabel(PREFIX + "l10", "Data Age:    " + ageText,                             x, y + lineH * i, freshCol);  i++;
