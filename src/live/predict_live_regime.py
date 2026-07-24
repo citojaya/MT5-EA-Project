@@ -26,7 +26,7 @@ CONFIG_FILE = "config/mt5_config_ICM_DEMO.json"
 
 # FXView
 MT5_FILES_DIR = Path(
-    "C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" # HP Laptop ICM
+    "C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" # HP Laptop ICM
     #"C:/Users/ctj17/AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files" #Laptop ICM
 
     #"C:/Users/citoj/AppData/Roaming/MetaQuotes/Terminal/A1F51CBE722B627327055CCFE794EB41/MQL5/Files" # Desktop FXView

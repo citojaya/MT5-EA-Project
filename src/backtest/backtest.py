@@ -12,15 +12,16 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.signals.regime_signals import generate_regime_signals
 from src.data.history_paths import (
+    backtest_dir_for_config,
     load_config,
     models_dir_for_config,
     raw_dir_for_config,
+    sanitize_directory_name,
 )
 from src.features.build_features import build_features
 
 
 HISTORY_BARS = 1000
-MT5_COMMON_FILES_DIR = Path.home() / "AppData/Roaming/MetaQuotes/Terminal/Common/Files"
 
 
 def output_symbol_for_config(symbol: str, config_file: str) -> str:
@@ -92,7 +93,11 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        help="Optional output CSV path. Defaults to MT5 Common Files/{symbol}_{timeframe}_backtest_signals.csv",
+        help=(
+            "Optional output CSV path. Defaults to "
+            "data/backtest/{server}/{symbol}/{timeframe}/"
+            "{symbol}_{timeframe}_backtest_signals.csv, using values from the config file"
+        ),
     )
     parser.add_argument(
         "--input-file",
@@ -117,6 +122,14 @@ def main():
     cfg = load_config(args.config_file)
     broker_raw_dir = raw_dir_for_config(args.config_file, cfg).resolve()
 
+    try:
+        config_symbol = sanitize_directory_name(str(cfg["symbol"]))
+        config_timeframe = sanitize_directory_name(str(cfg["timeframe"]).upper())
+    except KeyError as exc:
+        raise ValueError(
+            f"Config file must define {exc.args[0]!r} for the backtest output path"
+        ) from exc
+
     raw_file = args.input_file
     if not raw_file.is_absolute():
         raw_file = ROOT_DIR / raw_file
@@ -134,7 +147,11 @@ def main():
     output_file = (
         Path(args.output)
         if args.output
-        else MT5_COMMON_FILES_DIR / f"{symbol}_{timeframe}_backtest_signals.csv"
+        else ROOT_DIR
+        / backtest_dir_for_config(args.config_file, cfg)
+        / config_symbol
+        / config_timeframe
+        / f"{config_symbol}_{config_timeframe}_backtest_signals.csv"
     )
 
     raw_data = pd.read_csv(raw_file)
