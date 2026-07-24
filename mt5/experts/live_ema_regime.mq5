@@ -12,9 +12,11 @@ input string InpRegimeFile = "latest_regime_{symbol}_M5.txt"; // {symbol} = curr
 input bool   InpUseCommonFiles = false;              // false = terminal MQL5\Files
 input double InpLots = 0.01;                         // Fixed trade volume
 input double InpMinimumConfidence = 0.95;            // Minimum regime confidence (strictly greater)
+input bool   InpUseOpeningRegime = true;             // Use regime label to choose trade entries
+input bool   InpUseClosingRegime = true;             // Close trades on Transition or Range
 input ENUM_TIMEFRAMES InpEmaTimeframe = PERIOD_M5;    // EMA calculation timeframe
-input bool   InpUseEma9 = true;                       // Plot EMA(9) on chart
-input bool   InpUseEma21 = true;                      // Plot EMA(21) on chart
+input bool   InpUseEma9 = true;                       // Use EMA(9) for entries and plot it
+input bool   InpUseEma21 = true;                      // Use EMA(21) for entries and plot it
 input bool   InpUseEma200 = true;                       // Include EMA(200) in entry check and chart
 input double InpMinimumEmaGapIncreaseAtr = 0.01;       // Required absolute EMA-gap increase in ATR
 input ENUM_TIMEFRAMES InpAdxTimeframe = PERIOD_M5;    // ADX calculation timeframe
@@ -351,39 +353,47 @@ bool EmaPassed(datetime signalTime, int direction, double atr)
   {
    double ema9 = 0.0, ema21 = 0.0, ema200 = 0.0;
    double previousEma9 = 0.0, previousEma21 = 0.0;
-   bool have9 = GetIndicatorValue(g_ema9Handle, InpEmaTimeframe,
+   bool have9 = !InpUseEma9 ||
+                GetIndicatorValue(g_ema9Handle, InpEmaTimeframe,
                                   signalTime, "EMA(9)", ema9);
-   bool have21 = GetIndicatorValue(g_ema21Handle, InpEmaTimeframe,
+   bool have21 = !InpUseEma21 ||
+                 GetIndicatorValue(g_ema21Handle, InpEmaTimeframe,
                                    signalTime, "EMA(21)", ema21);
    bool have200 = !InpUseEma200 ||
                   GetIndicatorValue(g_ema200Handle, InpEmaTimeframe, signalTime, "EMA(200)", ema200);
    if(!have9 || !have21 || !have200)
       return false;
 
-   if(atr <= 0.0 ||
+   if(InpUseEma9 && InpUseEma21 && (atr <= 0.0 ||
       !GetPreviousIndicatorValue(g_ema9Handle, InpEmaTimeframe, signalTime,
                                  "EMA(9)", previousEma9) ||
       !GetPreviousIndicatorValue(g_ema21Handle, InpEmaTimeframe, signalTime,
-                                 "EMA(21)", previousEma21))
+                                 "EMA(21)", previousEma21)))
       return false;
 
-   double currentGap = MathAbs(ema9 - ema21);
-   double previousGap = MathAbs(previousEma9 - previousEma21);
-   double gapIncrease = currentGap - previousGap;
-   double requiredIncrease = InpMinimumEmaGapIncreaseAtr * atr;
-   if(gapIncrease < requiredIncrease)
+   if(InpUseEma9 && InpUseEma21)
      {
-      Print("Trade skipped: EMA(9)/EMA(21) gap increase ",
-            DoubleToString(gapIncrease, _Digits), " is below ",
-            DoubleToString(requiredIncrease, _Digits), " (",
-            DoubleToString(InpMinimumEmaGapIncreaseAtr, 2), " ATR)");
-      return false;
+      double gapIncrease = MathAbs(ema9 - ema21) -
+                           MathAbs(previousEma9 - previousEma21);
+      double requiredIncrease = InpMinimumEmaGapIncreaseAtr * atr;
+      if(gapIncrease < requiredIncrease)
+        {
+         Print("Trade skipped: EMA(9)/EMA(21) gap increase ",
+               DoubleToString(gapIncrease, _Digits), " is below ",
+               DoubleToString(requiredIncrease, _Digits), " (",
+               DoubleToString(InpMinimumEmaGapIncreaseAtr, 2), " ATR)");
+         return false;
+        }
      }
 
-   bool fastPassed = direction > 0 ? ema9 > ema21 : ema9 < ema21;
-   bool slowPassed = !InpUseEma21 || !InpUseEma200 ||
-                     (direction > 0 ? ema21 > ema200 : ema21 < ema200);
-   if(!fastPassed || !slowPassed)
+   bool emaPassed = true;
+   if(InpUseEma9 && InpUseEma21)
+      emaPassed = direction > 0 ? ema9 > ema21 : ema9 < ema21;
+   if(emaPassed && InpUseEma21 && InpUseEma200)
+      emaPassed = direction > 0 ? ema21 > ema200 : ema21 < ema200;
+   if(emaPassed && InpUseEma9 && !InpUseEma21 && InpUseEma200)
+      emaPassed = direction > 0 ? ema9 > ema200 : ema9 < ema200;
+   if(!emaPassed)
      {
       Print("Trade skipped: EMA condition failed. EMA(9)=", DoubleToString(ema9, _Digits),
             ", EMA(21)=", DoubleToString(ema21, _Digits),
@@ -477,7 +487,8 @@ void DrawPanel(const LiveRegime &regime)
    StringToLower(regimeName);
    bool bullishRegime = regimeName == "strong bull trend";
    bool bearishRegime = regimeName == "strong bear trend";
-   bool exitRegime = regimeName == "transition" || regimeName == "range";
+   bool exitRegime = InpUseClosingRegime &&
+                     (regimeName == "transition" || regimeName == "range");
    bool confidencePassed = regime.confidence > InpMinimumConfidence;
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -517,9 +528,11 @@ void DrawPanel(const LiveRegime &regime)
                     gapIncrease >= requiredGapIncrease;
    bool buyEmaPassed = emaAvailable && ema9 > ema21;
    bool sellEmaPassed = emaAvailable && ema9 < ema21;
-   bool buyReady = bullishRegime && confidencePassed && buyEmaPassed &&
+   bool buyReady = (!InpUseOpeningRegime || bullishRegime) &&
+                   confidencePassed && buyEmaPassed &&
                    adxPassed && gapPassed;
-   bool sellReady = bearishRegime && confidencePassed && sellEmaPassed &&
+   bool sellReady = (!InpUseOpeningRegime || bearishRegime) &&
+                    confidencePassed && sellEmaPassed &&
                     adxPassed && gapPassed;
 
    int i = 0;
@@ -568,19 +581,62 @@ void ProcessLatestRegime()
    StringTrimLeft(regimeName);
    StringTrimRight(regimeName);
    StringToLower(regimeName);
-   if(regimeName == "transition" || regimeName == "range")
+   if(InpUseClosingRegime &&
+      (regimeName == "transition" || regimeName == "range"))
      {
       CloseManagedPosition("regime changed to " + regime.name);
       return;
      }
 
    bool confidencePassed = regime.confidence > InpMinimumConfidence;
-   bool buySignal = regimeName == "strong bull trend" && confidencePassed;
-   bool sellSignal = regimeName == "strong bear trend" && confidencePassed;
-   if(!buySignal && !sellSignal)
-      return;
-
-   int desiredDirection = buySignal ? 1 : -1;
+   int desiredDirection = 0;
+   if(InpUseOpeningRegime)
+     {
+      bool buySignal = regimeName == "strong bull trend" && confidencePassed;
+      bool sellSignal = regimeName == "strong bear trend" && confidencePassed;
+      if(!buySignal && !sellSignal)
+         return;
+      desiredDirection = buySignal ? 1 : -1;
+     }
+   else
+     {
+      if(!confidencePassed)
+         return;
+      double ema9 = 0.0, ema21 = 0.0, ema200 = 0.0;
+      bool directionAvailable = false;
+      if(InpUseEma9 && InpUseEma21 &&
+         GetIndicatorValue(g_ema9Handle, InpEmaTimeframe, regime.time,
+                           "EMA(9)", ema9) &&
+         GetIndicatorValue(g_ema21Handle, InpEmaTimeframe, regime.time,
+                           "EMA(21)", ema21) && ema9 != ema21)
+        {
+         desiredDirection = ema9 > ema21 ? 1 : -1;
+         directionAvailable = true;
+        }
+      else if(InpUseEma21 && InpUseEma200 &&
+              GetIndicatorValue(g_ema21Handle, InpEmaTimeframe, regime.time,
+                                "EMA(21)", ema21) &&
+              GetIndicatorValue(g_ema200Handle, InpEmaTimeframe, regime.time,
+                                "EMA(200)", ema200) && ema21 != ema200)
+        {
+         desiredDirection = ema21 > ema200 ? 1 : -1;
+         directionAvailable = true;
+        }
+      else if(InpUseEma9 && InpUseEma200 &&
+              GetIndicatorValue(g_ema9Handle, InpEmaTimeframe, regime.time,
+                                "EMA(9)", ema9) &&
+              GetIndicatorValue(g_ema200Handle, InpEmaTimeframe, regime.time,
+                                "EMA(200)", ema200) && ema9 != ema200)
+        {
+         desiredDirection = ema9 > ema200 ? 1 : -1;
+         directionAvailable = true;
+        }
+      if(!directionAvailable)
+        {
+         Print("Trade skipped: opening regime is disabled, but fewer than two EMAs are enabled");
+         return;
+        }
+     }
    hasPosition = SelectManagedPosition(positionType);
    int currentDirection = !hasPosition ? 0 :
                            positionType == POSITION_TYPE_BUY ? 1 : -1;
