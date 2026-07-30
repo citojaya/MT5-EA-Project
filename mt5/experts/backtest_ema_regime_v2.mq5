@@ -25,6 +25,9 @@ input double          InpTrailingStopAtrMultiplier = 3.0;
 input int             InpDeviationPoints = 20;
 input ulong           InpMagicNumber = 30072027;
 input bool            InpCloseAtEndOfSignals = false;
+input bool            InpUseTimeFilter = true;
+input int             InpTradeStartHour = 1;  // Server time, inclusive
+input int             InpTradeEndHour = 22;   // Server time, exclusive
 
 CTrade g_trade;
 int g_ema9Handle = INVALID_HANDLE;
@@ -140,6 +143,22 @@ bool HasOpenPositionForSymbol()
          return true;
      }
    return false;
+  }
+
+bool IsWithinEntryHours()
+  {
+   if(!InpUseTimeFilter || InpTradeStartHour == InpTradeEndHour)
+      return true;
+
+   MqlDateTime serverTime;
+   TimeToStruct(TimeCurrent(), serverTime);
+   if(InpTradeStartHour < InpTradeEndHour)
+      return serverTime.hour >= InpTradeStartHour &&
+             serverTime.hour < InpTradeEndHour;
+
+   // A range such as 22 to 6 crosses midnight.
+   return serverTime.hour >= InpTradeStartHour ||
+          serverTime.hour < InpTradeEndHour;
   }
 
 bool CloseManagedPosition(string reason)
@@ -276,6 +295,11 @@ void ApplySignal(const int index)
                     (regime == 5 || regime == 0);
    bool sellSignal = priceClose < ema9 && ema9 < ema21 &&
                      (regime == 5 || regime == 2);
+   if((buySignal || sellSignal) && !IsWithinEntryHours())
+     {
+      Print("Open skipped: outside configured entry hours");
+      return;
+     }
    if(buySignal)
       OpenPosition(1, atr);
    else if(sellSignal)
@@ -285,9 +309,11 @@ void ApplySignal(const int index)
 int OnInit()
   {
    if(InpLots <= 0.0 || InpAtrPeriod <= 0 ||
-      InpStopLossAtrMultiplier <= 0.0 || InpTakeProfitAtrMultiplier <= 0.0 ||
-      InpBreakEvenTriggerAtr <= 0.0 || InpBreakEvenOffsetAtr < 0.0 ||
-      InpTrailingStopAtrMultiplier <= 0.0)
+       InpStopLossAtrMultiplier <= 0.0 || InpTakeProfitAtrMultiplier <= 0.0 ||
+       InpBreakEvenTriggerAtr <= 0.0 || InpBreakEvenOffsetAtr < 0.0 ||
+       InpTrailingStopAtrMultiplier <= 0.0 ||
+       InpTradeStartHour < 0 || InpTradeStartHour > 23 ||
+       InpTradeEndHour < 0 || InpTradeEndHour > 23)
       return INIT_PARAMETERS_INCORRECT;
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpDeviationPoints);
