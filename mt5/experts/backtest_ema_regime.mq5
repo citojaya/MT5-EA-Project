@@ -26,10 +26,11 @@ input int             InpAdxPeriod = 14;                        // ADX calculati
 input double          InpMinimumAdx = 25.0;                     // Minimum ADX for entry
 
 input double          InpLots = 0.01;                           // Fixed order volume
-input bool            InpUseCsvTrailingStop = false;             // Apply atr_trailing_stop from CSV
+input bool            InpUseAtrTrailingStop = false;             // Trail SL using current ATR
 input int             InpAtrPeriod = 14;                        // ATR period for initial SL/TP
 input double          InpStopLossAtrMultiplier = 4.0;           // Initial SL distance in ATR
 input double          InpTakeProfitAtrMultiplier = 6.0;         // Initial TP distance in ATR
+input double          InpTrailingStopAtrMultiplier = 3.0;       // Trailing SL distance in ATR
 input double          InpBreakEvenTriggerAtr = 3.0;              // Move SL after profit reaches this ATR multiple
 input double          InpBreakEvenOffsetAtr = 0.1;               // Lock this ATR multiple beyond entry
 input int             InpTradeStartHour = 1;                    // Entry start, server time (inclusive)
@@ -55,7 +56,6 @@ datetime g_times[];
 int      g_predLabels[];
 double   g_confidences[];
 double   g_confThresholds[];
-double   g_trailingStops[];
 string   g_regimeNames[];
 int      g_volOk[];
 int      g_signalCount = 0;
@@ -138,12 +138,10 @@ bool LoadSignals()
       FileClose(handle);
       return false;
      }
-
    ArrayResize(g_times, 1024);
    ArrayResize(g_predLabels, 1024);
    ArrayResize(g_confidences, 1024);
    ArrayResize(g_confThresholds, 1024);
-   ArrayResize(g_trailingStops, 1024);
    ArrayResize(g_regimeNames, 1024);
    ArrayResize(g_volOk, 1024);
 
@@ -172,7 +170,6 @@ bool LoadSignals()
          ArrayResize(g_predLabels, newSize);
          ArrayResize(g_confidences, newSize);
          ArrayResize(g_confThresholds, newSize);
-         ArrayResize(g_trailingStops, newSize);
          ArrayResize(g_regimeNames, newSize);
          ArrayResize(g_volOk, newSize);
         }
@@ -181,7 +178,6 @@ bool LoadSignals()
       g_predLabels[g_signalCount]     = 0;
       g_confidences[g_signalCount]    = StringToDouble(fields[confidenceCol]);
       g_confThresholds[g_signalCount] = InpMinimumConfidence;
-      g_trailingStops[g_signalCount]  = 0.0;
       g_regimeNames[g_signalCount]    = fields[regimeNameCol];
       g_volOk[g_signalCount]          = 1;
       g_signalCount++;
@@ -192,7 +188,6 @@ bool LoadSignals()
    ArrayResize(g_predLabels, g_signalCount);
    ArrayResize(g_confidences, g_signalCount);
    ArrayResize(g_confThresholds, g_signalCount);
-   ArrayResize(g_trailingStops, g_signalCount);
    ArrayResize(g_regimeNames, g_signalCount);
    ArrayResize(g_volOk, g_signalCount);
 
@@ -245,21 +240,6 @@ bool CloseManagedPosition(string reason)
    g_entryAtr = 0.0;
    Print("Position closed: ", reason);
    return true;
-  }
-
-//+------------------------------------------------------------------+
-double ValidCsvStop(int direction, double csvStop)
-  {
-   if(!InpUseCsvTrailingStop || csvStop <= 0.0)
-      return 0.0;
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   if(direction > 0 && csvStop < bid)
-      return NormalizeDouble(csvStop, digits);
-   if(direction < 0 && csvStop > ask)
-      return NormalizeDouble(csvStop, digits);
-   return 0.0;
   }
 
 //+------------------------------------------------------------------+
@@ -359,6 +339,44 @@ void ApplyBreakEven()
                    : (currentSl == 0.0 || breakEvenSl < currentSl);
    if(improves && !g_trade.PositionModify(_Symbol, breakEvenSl, currentTp))
       Print("Break-even update failed. ", g_trade.ResultRetcodeDescription());
+  }
+
+//+------------------------------------------------------------------+
+void ApplyAtrTrailingStop()
+  {
+   if(!InpUseAtrTrailingStop)
+      return;
+
+   long positionType = -1;
+   if(!SelectManagedPosition(positionType))
+      return;
+
+   double atrValues[];
+   if(CopyBuffer(g_atrHandle, 0, 0, 1, atrValues) != 1 ||
+      atrValues[0] == EMPTY_VALUE || atrValues[0] <= 0.0)
+      return;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   int stopsLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   int freezeLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minimumDistance = MathMax(stopsLevel, freezeLevel) * point;
+   double trailDistance = InpTrailingStopAtrMultiplier * atrValues[0];
+
+   double newSl = positionType == POSITION_TYPE_BUY
+                  ? MathMin(bid - trailDistance, bid - minimumDistance)
+                  : MathMax(ask + trailDistance, ask + minimumDistance);
+   newSl = NormalizeDouble(newSl, digits);
+
+   double currentSl = PositionGetDouble(POSITION_SL);
+   double currentTp = PositionGetDouble(POSITION_TP);
+   bool improves = positionType == POSITION_TYPE_BUY
+                   ? (currentSl == 0.0 || newSl > currentSl)
+                   : (currentSl == 0.0 || newSl < currentSl);
+   if(improves && !g_trade.PositionModify(_Symbol, newSl, currentTp))
+      Print("ATR trailing-stop update failed. ", g_trade.ResultRetcodeDescription());
   }
 
 //+------------------------------------------------------------------+
@@ -611,22 +629,6 @@ void DrawBacktestPanel(int index)
   }
 
 //+------------------------------------------------------------------+
-void UpdateCsvStop(int direction, double csvStop)
-  {
-   double newSl = ValidCsvStop(direction, csvStop);
-   if(newSl <= 0.0)
-      return;
-
-   double currentSl = PositionGetDouble(POSITION_SL);
-   double currentTp = PositionGetDouble(POSITION_TP);
-   bool improves = direction > 0
-                   ? (currentSl == 0.0 || newSl > currentSl)
-                   : (currentSl == 0.0 || newSl < currentSl);
-   if(improves && !g_trade.PositionModify(_Symbol, newSl, currentTp))
-      Print("Trailing-stop update failed. ", g_trade.ResultRetcodeDescription());
-  }
-
-//+------------------------------------------------------------------+
 void ApplySignal(int index)
   {
    string regime = g_regimeNames[index];
@@ -639,6 +641,9 @@ void ApplySignal(int index)
       CloseManagedPosition("regime changed to " + g_regimeNames[index]);
       return;
      }
+
+   long positionType = -1;
+   bool hasPosition = SelectManagedPosition(positionType);
 
    bool confidencePassed = g_confidences[index] > InpMinimumConfidence;
    int desiredDirection = 0;
@@ -690,8 +695,6 @@ void ApplySignal(int index)
         }
      }
 
-   long positionType = -1;
-   bool hasPosition = SelectManagedPosition(positionType);
    int currentDirection = !hasPosition ? 0 :
                           positionType == POSITION_TYPE_BUY ? 1 : -1;
    if(currentDirection == desiredDirection)
@@ -718,6 +721,7 @@ int OnInit()
   {
    if(InpAtrPeriod <= 0 || InpStopLossAtrMultiplier <= 0.0
       || InpTakeProfitAtrMultiplier <= 0.0
+      || InpTrailingStopAtrMultiplier <= 0.0
       || InpMinimumEmaGapAtr < 0.0
       || InpBreakEvenTriggerAtr <= 0.0 || InpBreakEvenOffsetAtr < 0.0)
       return INIT_PARAMETERS_INCORRECT;
@@ -783,6 +787,7 @@ void OnDeinit(const int reason)
 void OnTick()
   {
    ApplyBreakEven();
+   ApplyAtrTrailingStop();
 
    if(g_signalCount == 0)
       return;

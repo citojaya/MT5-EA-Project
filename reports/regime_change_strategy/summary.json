@@ -1,0 +1,52 @@
+{
+  "input": "data\\backtest\\ICMarketsAU-Demo\\XAUUSD\\M5\\XAUUSD_M5_backtest_signals.csv",
+  "raw_rows": 40391,
+  "rows_examined": 40391,
+  "start": "2026-01-02T01:00:00+00:00",
+  "end": "2026-07-28T23:55:00+00:00",
+  "price_mode": "close-only proxy",
+  "limitations": [
+    "Breakouts use the previous 12 closes because high/low columns are absent.",
+    "ATR uses mean absolute close changes because high/low columns are absent.",
+    "Stops, targets, and breakeven are evaluated at candle closes only.",
+    "Spread, commission, slippage, and position sizing cannot be evaluated."
+  ],
+  "raw_buy_signals": 367,
+  "raw_sell_signals": 405,
+  "all_trades": {
+    "trades": 352,
+    "wins": 115,
+    "losses": 193,
+    "breakeven": 44,
+    "win_rate": 0.32670454545454547,
+    "profit_factor": 1.1994962363051034,
+    "expectancy_r": 0.108672833193239,
+    "total_r": 38.25283728402013,
+    "max_drawdown_r": -23.090982940698932,
+    "average_bars_held": 4.6164772727272725
+  },
+  "buy_trades": {
+    "trades": 168,
+    "wins": 57,
+    "losses": 89,
+    "breakeven": 22,
+    "win_rate": 0.3392857142857143,
+    "profit_factor": 1.2808988764044968,
+    "expectancy_r": 0.14880952380952475,
+    "total_r": 25.00000000000016,
+    "max_drawdown_r": -12.000000000000341,
+    "average_bars_held": 4.684523809523809
+  },
+  "sell_trades": {
+    "trades": 184,
+    "wins": 58,
+    "losses": 104,
+    "breakeven": 22,
+    "win_rate": 0.31521739130434784,
+    "profit_factor": 1.1289849464812407,
+    "expectancy_r": 0.07202628958706506,
+    "total_r": 13.252837284019972,
+    "max_drawdown_r": -15.090982940698467,
+    "average_bars_held": 4.554347826086956
+  }
+}
