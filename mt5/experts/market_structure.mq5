@@ -22,12 +22,18 @@ input int    InpAtrPeriod = 14;                       // ATR period
 input double InpBreakoutBufferAtr = 0.10;             // Break distance beyond range in ATR
 input int    InpAdxPeriod = 14;                       // ADX period
 input double InpSidewaysAdx = 20.0;                   // Below this is always sideways
-input double InpMinimumTrendAdx = 25.0;               // Minimum ADX required to trade
+input double InpMinimumTrendAdx = 20.0;               // Minimum ADX required to trade
 input bool   InpRequireConsolidation = false;         // Apply optional pre-breakout range filter
 input double InpMaximumRangeAtr = 3.0;                // Maximum range width in ATR
 input double InpMaximumPreBreakoutAdx = 25.0;         // Maximum ADX before breakout
 input int    InpFastEmaPeriod = 9;                    // Fast EMA period
 input int    InpSlowEmaPeriod = 21;                   // Slow EMA period
+input bool   InpUseEma9 = false;                       // Use EMA(9) for trading
+input bool   InpUseEma21 = false;                      // Use EMA(21) for trading
+input bool   InpUseEma200 = false;                     // Use EMA(200) for trading
+input color  InpEma9Color = clrDeepSkyBlue;            // EMA(9) chart colour
+input color  InpEma21Color = clrOrange;                // EMA(21) chart colour
+input color  InpEma200Color = clrMagenta;              // EMA(200) chart colour
 input bool   InpUseRegimeCsv = USE_REGIME_CSV_DEFAULT;// Require CSV/TXT regime confirmation
 input string InpRegimeCsvFile = "";                  // Backtest CSV in Common Files (default=false only)
 input int    InpCsvTimeOffsetHours = 0;               // UTC source time -> broker server time
@@ -87,6 +93,8 @@ struct StructureState
    double adx;
    double fastEma;
    double slowEma;
+   double ema200;
+   double close;
    double upperLimit;
    double lowerLimit;
    double previousAdx;
@@ -109,6 +117,10 @@ int      g_atrHandle = INVALID_HANDLE;
 int      g_adxHandle = INVALID_HANDLE;
 int      g_fastEmaHandle = INVALID_HANDLE;
 int      g_slowEmaHandle = INVALID_HANDLE;
+int      g_ema200Handle = INVALID_HANDLE;
+int      g_chartEma9Handle = INVALID_HANDLE;
+int      g_chartEma21Handle = INVALID_HANDLE;
+int      g_chartEma200Handle = INVALID_HANDLE;
 datetime g_lastProcessedBar = 0;
 StructureState g_state;
 bool     g_stateAvailable = false;
@@ -119,6 +131,89 @@ string   g_currentCsvName = "";
 double   g_currentCsvConfidence = 0.0;
 string   g_regimeCsvFile = "";
 string   g_liveSignalFile = "";
+
+//+------------------------------------------------------------------+
+bool CreateChartEma(const int period, int &handle)
+  {
+   handle = iMA(_Symbol, PERIOD_CURRENT, period, 0, MODE_EMA, PRICE_CLOSE);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("Unable to create chart EMA(", period, ") handle. Error ",
+            GetLastError());
+      return false;
+     }
+
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+void DrawEma(const int handle, const string tag, const color lineColor)
+  {
+   const int requested = 300;
+   datetime times[];
+   double values[];
+   int count = MathMin(CopyTime(_Symbol, PERIOD_CURRENT, 0, requested, times),
+                       CopyBuffer(handle, 0, 0, requested, values));
+   if(count < 2)
+      return;
+
+   for(int index = 1; index < count; index++)
+     {
+      string name = PREFIX + "EMA_" + tag + "_" + IntegerToString(index);
+      if(ObjectFind(0, name) < 0)
+         ObjectCreate(0, name, OBJ_TREND, 0,
+                      times[index - 1], values[index - 1],
+                      times[index], values[index]);
+      else
+        {
+         ObjectMove(0, name, 0, times[index - 1], values[index - 1]);
+         ObjectMove(0, name, 1, times[index], values[index]);
+        }
+      ObjectSetInteger(0, name, OBJPROP_COLOR, lineColor);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, tag == "200" ? 2 : 1);
+      ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
+  }
+
+//+------------------------------------------------------------------+
+void DrawChartEmas()
+  {
+   DrawEma(g_chartEma9Handle, "9", InpEma9Color);
+   DrawEma(g_chartEma21Handle, "21", InpEma21Color);
+   DrawEma(g_chartEma200Handle, "200", InpEma200Color);
+  }
+
+//+------------------------------------------------------------------+
+bool EmaFilterPassed(const StructureState &state)
+  {
+   if(state.trend != TREND_UP && state.trend != TREND_DOWN)
+      return false;
+
+   bool bullish = state.trend == TREND_UP;
+   if(InpUseEma9 && InpUseEma21)
+     {
+      if(bullish ? state.fastEma <= state.slowEma
+                 : state.fastEma >= state.slowEma)
+         return false;
+     }
+   else if(InpUseEma9 &&
+           (bullish ? state.close <= state.fastEma
+                    : state.close >= state.fastEma))
+      return false;
+   else if(InpUseEma21 &&
+           (bullish ? state.close <= state.slowEma
+                    : state.close >= state.slowEma))
+      return false;
+
+   if(InpUseEma200 &&
+      (bullish ? state.close <= state.ema200
+               : state.close >= state.ema200))
+      return false;
+   return true;
+  }
 
 //+------------------------------------------------------------------+
 string RegimeFileSymbol()
@@ -490,8 +585,11 @@ bool CalculateStructure(StructureState &state)
       !ReadBufferValue(g_adxHandle, 0, 2, state.previousAdx) ||
       !ReadBufferValue(g_fastEmaHandle, 0, 1, state.fastEma) ||
       !ReadBufferValue(g_slowEmaHandle, 0, 1, state.slowEma) ||
+      !ReadBufferValue(g_ema200Handle, 0, 1, state.ema200) ||
       state.atr <= 0.0)
       return false;
+
+   state.close = rates[1].close;
 
    state.latestHigh = swings[latestHighIndex].price;
    state.latestHighTime = swings[latestHighIndex].time;
@@ -707,15 +805,9 @@ void DrawPanel()
                            g_state.trend == TREND_DOWN;
    bool tradeReady = directionalTrend &&
                      g_state.adx >= InpMinimumTrendAdx &&
-                     ((g_state.trend == TREND_UP &&
-                       g_state.fastEma > g_state.slowEma) ||
-                      (g_state.trend == TREND_DOWN &&
-                       g_state.fastEma < g_state.slowEma)) && csvPassed &&
+                     EmaFilterPassed(g_state) && csvPassed &&
                      IsWithinEntryHours() && !anyPosition;
-   bool emaPassed = (g_state.trend == TREND_UP &&
-                     g_state.fastEma > g_state.slowEma) ||
-                    (g_state.trend == TREND_DOWN &&
-                     g_state.fastEma < g_state.slowEma);
+   bool emaPassed = EmaFilterPassed(g_state);
 
    int row = 0;
    SetLabel(PREFIX + "title", "RANGE BREAKOUT EA", x, y + lineHeight * row++,
@@ -747,7 +839,8 @@ void DrawPanel()
    SetLabel(PREFIX + "l8", "EMA" + IntegerToString(InpFastEmaPeriod) +
             " / EMA" + IntegerToString(InpSlowEmaPeriod) + ": " +
             DoubleToString(g_state.fastEma, digits) + " / " +
-            DoubleToString(g_state.slowEma, digits) + " [" +
+            DoubleToString(g_state.slowEma, digits) + "  EMA200: " +
+            DoubleToString(g_state.ema200, digits) + " [" +
             (emaPassed ? "PASS" : "FAIL") + "]",
             x, y + lineHeight * row++, emaPassed ? clrLimeGreen : clrOrange);
    string csvText = !InpUseRegimeCsv ? "DISABLED" :
@@ -771,6 +864,8 @@ void DrawPanel()
 //+------------------------------------------------------------------+
 void ProcessSignal()
   {
+   DrawChartEmas();
+
    StructureState state;
    if(!CalculateStructure(state))
      {
@@ -799,8 +894,7 @@ void ProcessSignal()
       return;
    if(state.adx < InpMinimumTrendAdx)
       return;
-   if((state.trend == TREND_UP && state.fastEma <= state.slowEma) ||
-      (state.trend == TREND_DOWN && state.fastEma >= state.slowEma))
+   if(!EmaFilterPassed(state))
       return;
    if(InpUseRegimeCsv)
      {
@@ -849,12 +943,21 @@ int OnInit()
                          0, MODE_EMA, PRICE_CLOSE);
    g_slowEmaHandle = iMA(_Symbol, InpSignalTimeframe, InpSlowEmaPeriod,
                          0, MODE_EMA, PRICE_CLOSE);
+   g_ema200Handle = iMA(_Symbol, InpSignalTimeframe, 200,
+                        0, MODE_EMA, PRICE_CLOSE);
    if(g_atrHandle == INVALID_HANDLE || g_adxHandle == INVALID_HANDLE ||
-      g_fastEmaHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE)
+      g_fastEmaHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE ||
+      g_ema200Handle == INVALID_HANDLE)
      {
       Print("Unable to create ATR/ADX/EMA handles. Error ", GetLastError());
       return INIT_FAILED;
      }
+
+   // EMA lines are always visible; the inputs control trading filters only.
+   if(!CreateChartEma(9, g_chartEma9Handle) ||
+      !CreateChartEma(21, g_chartEma21Handle) ||
+      !CreateChartEma(200, g_chartEma200Handle))
+      return INIT_FAILED;
 
    if(InpUseRegimeCsv)
      {
@@ -885,6 +988,14 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_fastEmaHandle);
    if(g_slowEmaHandle != INVALID_HANDLE)
       IndicatorRelease(g_slowEmaHandle);
+   if(g_ema200Handle != INVALID_HANDLE)
+      IndicatorRelease(g_ema200Handle);
+   if(g_chartEma9Handle != INVALID_HANDLE)
+      IndicatorRelease(g_chartEma9Handle);
+   if(g_chartEma21Handle != INVALID_HANDLE)
+      IndicatorRelease(g_chartEma21Handle);
+   if(g_chartEma200Handle != INVALID_HANDLE)
+      IndicatorRelease(g_chartEma200Handle);
    ObjectsDeleteAll(0, PREFIX);
    ChartRedraw();
   }
