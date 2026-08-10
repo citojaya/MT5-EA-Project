@@ -30,10 +30,8 @@ input int    InpFastEmaPeriod = 21;                   // Fast EMA period
 input int    InpSlowEmaPeriod = 50;                   // Slow EMA period
 input bool   InpUseEma21 = false;                     // Use EMA(21) for trading
 input bool   InpUseEma50 = false;                     // Use EMA(50) for trading
-input bool   InpUseEma100 = false;                    // Use EMA(100) for trading
 input color  InpEma21Color = clrDeepSkyBlue;          // EMA(21) chart colour
 input color  InpEma50Color = clrOrange;               // EMA(50) chart colour
-input color  InpEma100Color = clrMagenta;             // EMA(100) chart colour
 input bool   InpUseRegimeCsv = USE_REGIME_CSV_DEFAULT;// Require CSV/TXT regime confirmation
 input string InpRegimeCsvFile = "";                  // Backtest CSV in Common Files (default=false only)
 input int    InpCsvTimeOffsetHours = 0;               // UTC source time -> broker server time
@@ -42,9 +40,8 @@ input double InpStopLossAtrMultiplier = 4.0;          // Initial stop distance
 input double InpTakeProfitAtrMultiplier = 6.0;        // Initial target distance
 input int    InpTradeStartHour = 1;                   // Server hour, inclusive
 input int    InpTradeEndHour = 22;                    // Server hour, exclusive
-input bool   InpCloseOnEmaFlip = true;                // Close when EMA50/EMA100 direction flips
 input int    InpDeviationPoints = 20;                 // Maximum order deviation
-input ulong  InpMagicNumber = 22222222;               // EA magic number
+input ulong  InpMagicNumber = 11111111;               // EA magic number
 input bool             InpShowPanel = true;           // Show status panel
 input ENUM_BASE_CORNER InpPanelCorner = CORNER_LEFT_UPPER;
 input int              InpXOffset = 15;
@@ -94,7 +91,6 @@ struct StructureState
    double adx;
    double fastEma;
    double slowEma;
-   double ema100;
    double close;
    double upperLimit;
    double lowerLimit;
@@ -118,10 +114,8 @@ int      g_atrHandle = INVALID_HANDLE;
 int      g_adxHandle = INVALID_HANDLE;
 int      g_fastEmaHandle = INVALID_HANDLE;
 int      g_slowEmaHandle = INVALID_HANDLE;
-int      g_ema100Handle = INVALID_HANDLE;
 int      g_chartEma21Handle = INVALID_HANDLE;
 int      g_chartEma50Handle = INVALID_HANDLE;
-int      g_chartEma100Handle = INVALID_HANDLE;
 datetime g_lastProcessedBar = 0;
 long     g_lastTesterBarBucket = -1;
 int      g_signalPeriodSeconds = 0;
@@ -189,7 +183,6 @@ void DrawChartEmas()
    if(g_isTester)
       return;
    DrawEma(g_chartEma50Handle, "50", InpEma50Color);
-   DrawEma(g_chartEma100Handle, "100", InpEma100Color);
   }
 
 //+------------------------------------------------------------------+
@@ -508,7 +501,6 @@ bool CalculateStructure(StructureState &state)
 
    if(!ReadBufferValue(g_atrHandle, 0, 1, state.atr) ||
       !ReadBufferValue(g_slowEmaHandle, 0, 1, state.slowEma) ||
-      !ReadBufferValue(g_ema100Handle, 0, 1, state.ema100) ||
       state.atr <= 0.0)
       return false;
 
@@ -682,33 +674,6 @@ void ManageBreakEven()
      }
    Print("Stop moved to break even at ", DoubleToString(entry, _Digits),
          " after profit reached 2 x ATR");
-  }
-
-//+------------------------------------------------------------------+
-bool CloseOnEmaFlip(const StructureState &state)
-  {
-   if(!InpCloseOnEmaFlip)
-      return false;
-
-   long positionType;
-   if(!SelectManagedPosition(positionType))
-      return false;
-
-   bool flipped = positionType == POSITION_TYPE_BUY
-                  ? state.slowEma <= state.ema100
-                  : state.slowEma >= state.ema100;
-   if(!flipped)
-      return false;
-
-   if(!g_trade.PositionClose(_Symbol))
-     {
-      Print("EMA flip close failed: ", g_trade.ResultRetcodeDescription());
-      return false;
-     }
-
-   g_entryAtr = 0.0;
-   Print("Position closed: EMA50/EMA100 direction flipped");
-   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -910,8 +875,7 @@ void DrawPanel()
             DoubleToString(g_state.slowEma, digits) + " [" +
             (emaPassed ? "PASS" : "FAIL") + "]",
             x, y + lineHeight * row++, emaPassed ? clrLimeGreen : clrOrange);
-   SetLabel(PREFIX + "l9", "Stops:        Prior range; TP=2R; EMA flip close " +
-            (InpCloseOnEmaFlip ? "ON" : "OFF"),
+   SetLabel(PREFIX + "l9", "Stops:        Prior range; TP=2R",
             x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l10", "Position:     " + positionText,
             x, y + lineHeight * row++, anyPosition ? clrAqua : clrSilver);
@@ -954,14 +918,6 @@ void ProcessSignal()
    if(!g_isTester)
       WriteLiveSignal(state.barTime, state.trend);
 
-   // A flip exit is evaluated on completed signal-timeframe candles. Do not
-   // reverse into a new position on the same candle that triggered the exit.
-   if(CloseOnEmaFlip(state))
-     {
-      DrawPanel();
-      return;
-     }
-
    TrailProfitableTradeToPreviousRange(state);
 
    if(state.trend != TREND_UP && state.trend != TREND_DOWN)
@@ -999,10 +955,7 @@ int OnInit()
    g_atrHandle = iATR(_Symbol, InpSignalTimeframe, InpAtrPeriod);
    g_slowEmaHandle = iMA(_Symbol, InpSignalTimeframe, 50,
                          0, MODE_EMA, PRICE_CLOSE);
-   g_ema100Handle = iMA(_Symbol, InpSignalTimeframe, 100,
-                        0, MODE_EMA, PRICE_CLOSE);
-   if(g_atrHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE ||
-      g_ema100Handle == INVALID_HANDLE)
+   if(g_atrHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE)
      {
       Print("Unable to create ATR/EMA handles. Error ", GetLastError());
       return INIT_FAILED;
@@ -1011,8 +964,7 @@ int OnInit()
    // Chart-only EMA handles and objects are unnecessary in Strategy Tester.
    if(!g_isTester)
      {
-      if(!CreateChartEma(50, g_chartEma50Handle) ||
-         !CreateChartEma(100, g_chartEma100Handle))
+      if(!CreateChartEma(50, g_chartEma50Handle))
          return INIT_FAILED;
      }
 
@@ -1039,14 +991,10 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_fastEmaHandle);
    if(g_slowEmaHandle != INVALID_HANDLE)
       IndicatorRelease(g_slowEmaHandle);
-   if(g_ema100Handle != INVALID_HANDLE)
-      IndicatorRelease(g_ema100Handle);
    if(g_chartEma21Handle != INVALID_HANDLE)
       IndicatorRelease(g_chartEma21Handle);
    if(g_chartEma50Handle != INVALID_HANDLE)
       IndicatorRelease(g_chartEma50Handle);
-   if(g_chartEma100Handle != INVALID_HANDLE)
-      IndicatorRelease(g_chartEma100Handle);
    ObjectsDeleteAll(0, PREFIX);
    ChartRedraw();
   }
