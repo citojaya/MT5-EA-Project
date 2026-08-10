@@ -181,7 +181,6 @@ void DrawEma(const int handle, const string tag, const color lineColor)
 //+------------------------------------------------------------------+
 void DrawChartEmas()
   {
-   DrawEma(g_chartEma21Handle, "21", InpEma21Color);
    DrawEma(g_chartEma50Handle, "50", InpEma50Color);
    DrawEma(g_chartEma100Handle, "100", InpEma100Color);
   }
@@ -189,30 +188,11 @@ void DrawChartEmas()
 //+------------------------------------------------------------------+
 bool EmaFilterPassed(const StructureState &state)
   {
-   if(state.trend != TREND_UP && state.trend != TREND_DOWN)
-      return false;
-
-   bool bullish = state.trend == TREND_UP;
-   if(InpUseEma21 && InpUseEma50)
-     {
-      if(bullish ? state.fastEma <= state.slowEma
-                 : state.fastEma >= state.slowEma)
-         return false;
-     }
-   else if(InpUseEma21 &&
-           (bullish ? state.close <= state.fastEma
-                    : state.close >= state.fastEma))
-      return false;
-   else if(InpUseEma50 &&
-           (bullish ? state.close <= state.slowEma
-                    : state.close >= state.slowEma))
-      return false;
-
-   if(InpUseEma100 &&
-      (bullish ? state.close <= state.ema100
-               : state.close >= state.ema100))
-      return false;
-   return true;
+   if(state.trend == TREND_UP)
+      return state.slowEma > state.ema100;
+   if(state.trend == TREND_DOWN)
+      return state.slowEma < state.ema100;
+   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -512,95 +492,20 @@ bool ReadBufferValue(int handle, int bufferNumber, int shift, double &value)
 //+------------------------------------------------------------------+
 bool CalculateStructure(StructureState &state)
   {
-   int requested = MathMax(InpPivotLookback + InpPivotLeft + InpPivotRight + 10,
-                           InpBreakoutLookback + 10);
+   int requested = InpBreakoutLookback + 10;
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    int copied = CopyRates(_Symbol, InpSignalTimeframe, 0, requested, rates);
-   if(copied < MathMax(InpPivotLeft + InpPivotRight + 10,
-                       InpBreakoutLookback + 2))
+   if(copied < InpBreakoutLookback + 2)
       return false;
 
-   int firstShift = InpPivotRight + 1;
-   int lastShift = MathMin(copied - InpPivotLeft - 1, InpPivotLookback);
-
-   // Build swings from oldest to newest. Consecutive pivots of the same
-   // type are collapsed to the more extreme price, producing a genuinely
-   // alternating sequence. Ambiguous outside bars that are both a high and
-   // a low pivot are ignored rather than assigning two swings to one bar.
-   SwingPoint swings[];
-   int swingCount = 0;
-   for(int shift = lastShift; shift >= firstShift; shift--)
-     {
-      bool pivotHigh = IsPivotHigh(rates, copied, shift);
-      bool pivotLow = IsPivotLow(rates, copied, shift);
-      if(pivotHigh == pivotLow)
-         continue;
-
-      SwingType type = pivotHigh ? SWING_HIGH : SWING_LOW;
-      double price = pivotHigh ? rates[shift].high : rates[shift].low;
-      if(swingCount > 0 && swings[swingCount - 1].type == type)
-        {
-         bool moreExtreme = type == SWING_HIGH
-                            ? price > swings[swingCount - 1].price
-                            : price < swings[swingCount - 1].price;
-         if(moreExtreme)
-           {
-            swings[swingCount - 1].time = rates[shift].time;
-            swings[swingCount - 1].price = price;
-            swings[swingCount - 1].shift = shift;
-           }
-         continue;
-        }
-
-      ArrayResize(swings, swingCount + 1, 64);
-      swings[swingCount].type = type;
-      swings[swingCount].time = rates[shift].time;
-      swings[swingCount].price = price;
-      swings[swingCount].shift = shift;
-      swingCount++;
-     }
-
-   int latestHighIndex = -1, previousHighIndex = -1;
-   int latestLowIndex = -1, previousLowIndex = -1;
-   for(int index = swingCount - 1; index >= 0; index--)
-     {
-      if(swings[index].type == SWING_HIGH)
-        {
-         if(latestHighIndex < 0) latestHighIndex = index;
-         else if(previousHighIndex < 0) previousHighIndex = index;
-        }
-      else
-        {
-         if(latestLowIndex < 0) latestLowIndex = index;
-         else if(previousLowIndex < 0) previousLowIndex = index;
-        }
-      if(previousHighIndex >= 0 && previousLowIndex >= 0)
-         break;
-     }
-
-   if(previousHighIndex < 0 || previousLowIndex < 0 ||
-      !ReadBufferValue(g_atrHandle, 0, 1, state.atr) ||
-      !ReadBufferValue(g_adxHandle, 0, 1, state.adx) ||
-      !ReadBufferValue(g_adxHandle, 0, 2, state.previousAdx) ||
-      !ReadBufferValue(g_fastEmaHandle, 0, 1, state.fastEma) ||
+   if(!ReadBufferValue(g_atrHandle, 0, 1, state.atr) ||
       !ReadBufferValue(g_slowEmaHandle, 0, 1, state.slowEma) ||
       !ReadBufferValue(g_ema100Handle, 0, 1, state.ema100) ||
       state.atr <= 0.0)
       return false;
 
    state.close = rates[1].close;
-
-   state.latestHigh = swings[latestHighIndex].price;
-   state.latestHighTime = swings[latestHighIndex].time;
-   state.latestHighShift = swings[latestHighIndex].shift;
-   state.previousHigh = swings[previousHighIndex].price;
-   state.previousHighTime = swings[previousHighIndex].time;
-   state.latestLow = swings[latestLowIndex].price;
-   state.latestLowTime = swings[latestLowIndex].time;
-   state.latestLowShift = swings[latestLowIndex].shift;
-   state.previousLow = swings[previousLowIndex].price;
-   state.previousLowTime = swings[previousLowIndex].time;
 
    state.barTime = rates[1].time;
    state.buffer = InpBreakoutBufferAtr * state.atr;
@@ -615,9 +520,7 @@ bool CalculateStructure(StructureState &state)
       state.lowerLimit = MathMin(state.lowerLimit, rates[shift].low);
      }
    state.rangeWidth = state.upperLimit - state.lowerLimit;
-   state.consolidationPassed = !InpRequireConsolidation ||
-                               (state.rangeWidth <= InpMaximumRangeAtr * state.atr &&
-                                state.previousAdx <= InpMaximumPreBreakoutAdx);
+   state.consolidationPassed = true;
 
    bool upperBreak = rates[1].close > state.upperLimit + state.buffer &&
                      rates[2].close <= state.upperLimit + state.buffer;
@@ -627,14 +530,7 @@ bool CalculateStructure(StructureState &state)
    state.trend = TREND_TRANSITION;
    state.detail = "Inside previous " + IntegerToString(InpBreakoutLookback) +
                   "-bar range";
-   if(state.adx < InpSidewaysAdx)
-     {
-      state.trend = TREND_SIDEWAYS;
-      state.detail = "ADX below sideways threshold";
-     }
-   else if(!state.consolidationPassed)
-      state.detail = "Breakout blocked by consolidation filter";
-   else if(upperBreak)
+   if(upperBreak)
      {
       state.trend = TREND_UP;
       state.detail = "Close broke above prior range + ATR buffer";
@@ -696,7 +592,7 @@ double NormalizeVolume(double volume)
   }
 
 //+------------------------------------------------------------------+
-bool OpenTrade(TrendDirection direction, double atr)
+bool OpenTrade(TrendDirection direction)
   {
    if((direction != TREND_UP && direction != TREND_DOWN) ||
       HasOpenPositionForSymbol())
@@ -706,18 +602,20 @@ bool OpenTrade(TrendDirection direction, double atr)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double minimumStop = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) *
                         SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double stopDistance = MathMax(InpStopLossAtrMultiplier * atr, minimumStop);
-   double targetDistance = MathMax(InpTakeProfitAtrMultiplier * atr, minimumStop);
-   double atrStop = direction == TREND_UP ? ask - stopDistance : bid + stopDistance;
-   double structureStop = direction == TREND_UP ? g_state.latestLow : g_state.latestHigh;
-   int structureStopAge = direction == TREND_UP
-                          ? g_state.latestLowShift : g_state.latestHighShift;
-   bool structureStopValid = structureStopAge <= InpMaximumSwingAgeBars &&
-                             (direction == TREND_UP
-                              ? structureStop <= bid - minimumStop
-                              : structureStop >= ask + minimumStop);
-   double sl = structureStopValid ? structureStop : atrStop;
-   double tp = direction == TREND_UP ? ask + targetDistance : bid - targetDistance;
+   double entry = direction == TREND_UP ? ask : bid;
+   // Use the lowest low/highest high of the completed pre-breakout range.
+   double sl = direction == TREND_UP ? g_state.lowerLimit : g_state.upperLimit;
+   bool stopValid = direction == TREND_UP
+                    ? sl <= bid - minimumStop
+                    : sl >= ask + minimumStop;
+   if(!stopValid)
+     {
+      Print("Order skipped: previous range stop is inside broker minimum stop distance");
+      return false;
+     }
+   double risk = MathAbs(entry - sl);
+   double tp = direction == TREND_UP ? entry + 2.0 * risk
+                                     : entry - 2.0 * risk;
    string comment = direction == TREND_UP ? "Range breakout BUY" : "Range breakout SELL";
 
    bool opened = direction == TREND_UP
@@ -730,7 +628,8 @@ bool OpenTrade(TrendDirection direction, double atr)
       Print("Order failed: ", g_trade.ResultRetcodeDescription());
       return false;
      }
-   Print("Opened ", comment, "; ADX=", DoubleToString(g_state.adx, 2));
+   Print("Opened ", comment, "; SL=", DoubleToString(sl, _Digits),
+         "; TP=", DoubleToString(tp, _Digits), "; reward/risk=2.0");
    return true;
   }
 
@@ -795,18 +694,10 @@ void DrawPanel()
                          managedPosition
                          ? (positionType == POSITION_TYPE_BUY ? "BUY" : "SELL")
                          : "BLOCKED BY OTHER POSITION";
-   bool csvPassed = !InpUseRegimeCsv ||
-                    (g_csvSignalAvailable &&
-                     ((g_state.trend == TREND_UP &&
-                       (g_currentCsvRegime == 0 || g_currentCsvRegime == 5)) ||
-                      (g_state.trend == TREND_DOWN &&
-                       (g_currentCsvRegime == 2 || g_currentCsvRegime == 5))));
    bool directionalTrend = g_state.trend == TREND_UP ||
                            g_state.trend == TREND_DOWN;
    bool tradeReady = directionalTrend &&
-                     g_state.adx >= InpMinimumTrendAdx &&
-                     EmaFilterPassed(g_state) && csvPassed &&
-                     IsWithinEntryHours() && !anyPosition;
+                     EmaFilterPassed(g_state) && !anyPosition;
    bool emaPassed = EmaFilterPassed(g_state);
 
    int row = 0;
@@ -822,34 +713,22 @@ void DrawPanel()
             DoubleToString(g_state.upperLimit, digits) + " / " +
             DoubleToString(g_state.lowerLimit, digits),
             x, y + lineHeight * row++, clrSilver);
-   SetLabel(PREFIX + "l5", "Range filter: " +
-            (g_state.consolidationPassed ? "PASS" : "FAIL") +
-            "  width=" + DoubleToString(g_state.rangeWidth, digits) +
-            "  prior ADX=" + DoubleToString(g_state.previousAdx, 2),
-            x, y + lineHeight * row++,
-            g_state.consolidationPassed ? clrLimeGreen : clrOrange);
+   SetLabel(PREFIX + "l5", "Range width:  " +
+            DoubleToString(g_state.rangeWidth, digits),
+            x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l6", "ATR / buffer: " +
             DoubleToString(g_state.atr, digits) + " / " +
             DoubleToString(g_state.buffer, digits),
             x, y + lineHeight * row++, clrSilver);
-   SetLabel(PREFIX + "l7", "ADX:          " + DoubleToString(g_state.adx, 2) +
-            "  (trade >= " + DoubleToString(InpMinimumTrendAdx, 1) + ")",
-            x, y + lineHeight * row++,
-            g_state.adx >= InpMinimumTrendAdx ? clrLimeGreen : clrOrange);
-   SetLabel(PREFIX + "l8", "EMA" + IntegerToString(InpFastEmaPeriod) +
-            " / EMA" + IntegerToString(InpSlowEmaPeriod) + ": " +
-            DoubleToString(g_state.fastEma, digits) + " / " +
-            DoubleToString(g_state.slowEma, digits) + "  EMA100: " +
+   SetLabel(PREFIX + "l7", "Filters:      ADX, EMA21, regime, hours DISABLED",
+            x, y + lineHeight * row++, clrSilver);
+   SetLabel(PREFIX + "l8", "EMA50 / EMA100: " +
+            DoubleToString(g_state.slowEma, digits) + " / " +
             DoubleToString(g_state.ema100, digits) + " [" +
             (emaPassed ? "PASS" : "FAIL") + "]",
             x, y + lineHeight * row++, emaPassed ? clrLimeGreen : clrOrange);
-   string csvText = !InpUseRegimeCsv ? "DISABLED" :
-                    !g_csvSignalAvailable ? "NO MATCHING ROW" :
-                    IntegerToString(g_currentCsvRegime) + " " + g_currentCsvName +
-                    "  conf=" + DoubleToString(g_currentCsvConfidence, 4) +
-                    " [" + (csvPassed ? "PASS" : "FAIL") + "]";
-   SetLabel(PREFIX + "l9", "Regime file:  " + csvText,
-            x, y + lineHeight * row++, csvPassed ? clrLimeGreen : clrOrange);
+   SetLabel(PREFIX + "l9", "Stops:        Prior range extreme; TP = 2R",
+            x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l10", "Position:     " + positionText,
             x, y + lineHeight * row++, anyPosition ? clrAqua : clrSilver);
    SetLabel(PREFIX + "l11", "Order status: " +
@@ -876,7 +755,6 @@ void ProcessSignal()
 
    g_state = state;
    g_stateAvailable = true;
-   UpdateCurrentCsvSignal(state.barTime);
    DrawPanel();
 
    if(state.barTime <= g_lastProcessedBar)
@@ -890,83 +768,40 @@ void ProcessSignal()
    // A position of any magic number on this symbol blocks all new entries.
    // No signal closes or reverses an existing trade. Once opened, a position
    // remains unchanged until its original broker-side SL or TP is executed.
-   if(HasOpenPositionForSymbol() || !IsWithinEntryHours())
-      return;
-   if(state.adx < InpMinimumTrendAdx)
+   if(HasOpenPositionForSymbol())
       return;
    if(!EmaFilterPassed(state))
       return;
-   if(InpUseRegimeCsv)
-     {
-      if(!g_csvSignalAvailable)
-         return;
-      bool csvBuyAllowed = g_currentCsvRegime == 0 || g_currentCsvRegime == 5;
-      bool csvSellAllowed = g_currentCsvRegime == 2 || g_currentCsvRegime == 5;
-      if((state.trend == TREND_UP && !csvBuyAllowed) ||
-         (state.trend == TREND_DOWN && !csvSellAllowed))
-         return;
-     }
-
-   OpenTrade(state.trend, state.atr);
+   OpenTrade(state.trend);
    DrawPanel();
   }
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   g_regimeCsvFile = ResolveRegimeFile();
    g_liveSignalFile = "live_signal_" + RegimeFileSymbol() + ".csv";
    Print("Chart symbol ", Symbol(), ": live signal file=", g_liveSignalFile);
-   if(!USE_REGIME_CSV_DEFAULT && g_regimeCsvFile == "")
-     {
-      Print("InpRegimeCsvFile must be supplied when USE_REGIME_CSV_DEFAULT=false");
-      return INIT_PARAMETERS_INCORRECT;
-     }
 
-   if(InpPivotLeft < 1 || InpPivotRight < 1 || InpPivotLookback < 20 ||
-      InpMaximumSwingAgeBars < InpPivotRight + 1 ||
-      InpBreakoutLookback < 2 || InpAtrPeriod < 1 || InpAdxPeriod < 1 ||
-      InpBreakoutBufferAtr < 0.0 || InpMaximumRangeAtr <= 0.0 ||
-      InpMaximumPreBreakoutAdx < 0.0 ||
-      InpFastEmaPeriod < 1 || InpSlowEmaPeriod <= InpFastEmaPeriod ||
-      InpCsvTimeOffsetHours < -24 || InpCsvTimeOffsetHours > 24 ||
-      InpSidewaysAdx < 0.0 || InpMinimumTrendAdx < InpSidewaysAdx ||
-      InpLots <= 0.0 || InpStopLossAtrMultiplier <= 0.0 ||
-      InpTakeProfitAtrMultiplier <= 0.0 || InpTradeStartHour < 0 ||
-      InpTradeStartHour > 23 || InpTradeEndHour < 1 ||
-      InpTradeEndHour > 24 || InpTradeStartHour >= InpTradeEndHour)
+   if(InpBreakoutLookback < 2 || InpAtrPeriod < 1 ||
+      InpBreakoutBufferAtr < 0.0 || InpLots <= 0.0)
       return INIT_PARAMETERS_INCORRECT;
 
    g_atrHandle = iATR(_Symbol, InpSignalTimeframe, InpAtrPeriod);
-   g_adxHandle = iADX(_Symbol, InpSignalTimeframe, InpAdxPeriod);
-   g_fastEmaHandle = iMA(_Symbol, InpSignalTimeframe, InpFastEmaPeriod,
-                         0, MODE_EMA, PRICE_CLOSE);
-   g_slowEmaHandle = iMA(_Symbol, InpSignalTimeframe, InpSlowEmaPeriod,
+   g_slowEmaHandle = iMA(_Symbol, InpSignalTimeframe, 50,
                          0, MODE_EMA, PRICE_CLOSE);
    g_ema100Handle = iMA(_Symbol, InpSignalTimeframe, 100,
                         0, MODE_EMA, PRICE_CLOSE);
-   if(g_atrHandle == INVALID_HANDLE || g_adxHandle == INVALID_HANDLE ||
-      g_fastEmaHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE ||
+   if(g_atrHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE ||
       g_ema100Handle == INVALID_HANDLE)
      {
-      Print("Unable to create ATR/ADX/EMA handles. Error ", GetLastError());
+      Print("Unable to create ATR/EMA handles. Error ", GetLastError());
       return INIT_FAILED;
      }
 
-   // EMA lines are always visible; the inputs control trading filters only.
-   if(!CreateChartEma(21, g_chartEma21Handle) ||
-      !CreateChartEma(50, g_chartEma50Handle) ||
+   // Only EMA(50) and EMA(100) are displayed and used for entries.
+   if(!CreateChartEma(50, g_chartEma50Handle) ||
       !CreateChartEma(100, g_chartEma100Handle))
       return INIT_FAILED;
-
-   if(InpUseRegimeCsv)
-     {
-      if(IsLiveRegimeTextFile())
-         Print("Live key=value regime source enabled: terminal MQL5\\Files\\",
-               g_regimeCsvFile);
-      else if(!LoadRegimeCsv())
-         return INIT_FAILED;
-     }
 
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpDeviationPoints);
