@@ -750,36 +750,6 @@ void CloseOnPreviousRangeBreak()
   }
 
 //+------------------------------------------------------------------+
-void CloseOnPriceEma50Break()
-  {
-   long positionType;
-   if(!SelectManagedPosition(positionType))
-      return;
-
-   double ema50;
-   if(!ReadBufferValue(g_slowEmaHandle, 0, 0, ema50))
-      return;
-
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   bool isBuy = positionType == POSITION_TYPE_BUY;
-   bool emaBroken = isBuy ? bid < ema50 : ask > ema50;
-   if(!emaBroken)
-      return;
-
-   if(!g_trade.PositionClose(_Symbol))
-     {
-      Print("Price/EMA50 close failed: ", g_trade.ResultRetcodeDescription());
-      return;
-     }
-
-   g_entryAtr = 0.0;
-   Print(isBuy ? "Buy closed: price fell below EMA50 at "
-               : "Sell closed: price rose above EMA50 at ",
-         DoubleToString(ema50, _Digits));
-  }
-
-//+------------------------------------------------------------------+
 void SetBackground(string name, int x, int y, int width, int height)
   {
    if(ObjectFind(0, name) < 0)
@@ -1022,8 +992,7 @@ void OnTick()
         }
      }
 
-   // Unlike entries, price/EMA and structure-break exits run on every tick.
-   CloseOnPriceEma50Break();
+   // Unlike entries, structure-break exits run on every tick.
    CloseOnPreviousRangeBreak();
   }
 //+------------------------------------------------------------------+
