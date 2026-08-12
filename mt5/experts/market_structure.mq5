@@ -41,17 +41,20 @@ input bool   InpUseEma50 = false;                     // Use EMA(50) for trading
 input color  InpEma21Color = clrDeepSkyBlue;          // EMA(21) chart colour
 input color  InpEma50Color = clrOrange;               // EMA(50) chart colour
 input color  InpEma100Color = clrMagenta;              // EMA(100) chart colour
+input double InpAtrTrailingMultiplier = 3.0;           // ATR trailing-stop distance
+input color  InpAtrTrailingColor = clrRed;             // ATR trailing-stop chart colour
 input bool   InpUseRegimeCsv = USE_REGIME_CSV_DEFAULT;// Require CSV/TXT regime confirmation
 input string InpRegimeCsvFile = "";                  // Backtest CSV in Common Files (default=false only)
 input int    InpCsvTimeOffsetHours = 0;               // UTC source time -> broker server time
 input double InpLots = 0.01;                          // Fixed trade volume
 input double InpStopLossAtrMultiplier = 4.0;          // Initial stop distance
 input double InpTakeProfitAtrMultiplier = 6.0;        // Initial target distance
+input double InpTakeProfitRiskReward = 2.0;           // TP as multiple of entry-to-SL risk
 input int    InpTradeStartHour = 1;                   // Server hour, inclusive
 input int    InpTradeEndHour = 22;                    // Server hour, exclusive
 input bool   InpAllowSameDirectionEntries = ALLOW_SAME_DIRECTION_ENTRIES_DEFAULT;
 input int    InpMaximumSameDirectionEntries = 5;      // Maximum entries per symbol/direction
-input double InpPullbackRearmAtr = 0.25;              // Move away from EMA21 before next pullback
+input double InpMinimumEntryGapAtr = 2.0;             // Minimum gap from previous entry
 input int    InpDeviationPoints = 20;                 // Maximum order deviation
 input ulong  InpMagicNumber = MAGIC_NUMBER_DEFAULT;   // EA magic number
 input bool             InpShowPanel = true;           // Show status panel
@@ -131,11 +134,13 @@ int      g_ema100Handle = INVALID_HANDLE;
 int      g_chartEma21Handle = INVALID_HANDLE;
 int      g_chartEma50Handle = INVALID_HANDLE;
 int      g_chartEma100Handle = INVALID_HANDLE;
+int      g_chartAtrHandle = INVALID_HANDLE;
 datetime g_lastProcessedBar = 0;
 long     g_lastTesterBarBucket = -1;
 int      g_signalPeriodSeconds = 0;
 bool     g_isTester = false;
-bool     g_pullbackArmed = false;
+long     g_ema21TouchBarBucket = -1;
+double   g_lastEntryPrice = 0.0;
 StructureState g_state;
 bool     g_stateAvailable = false;
 CsvRegimeSignal g_csvSignals[];
@@ -200,6 +205,84 @@ void DrawChartEmas()
    DrawEma(g_chartEma21Handle, "21", InpEma21Color);
    DrawEma(g_chartEma50Handle, "50", InpEma50Color);
    DrawEma(g_chartEma100Handle, "100", InpEma100Color);
+  }
+
+//+------------------------------------------------------------------+
+void DrawAtrTrailingStop()
+  {
+   if(g_isTester || g_chartAtrHandle == INVALID_HANDLE)
+      return;
+
+   const int requested = 600;
+   const int plotted = 300;
+   MqlRates rates[];
+   double atrValues[];
+   int ratesCount = CopyRates(_Symbol, PERIOD_CURRENT, 0, requested, rates);
+   int atrCount = CopyBuffer(g_chartAtrHandle, 0, 0, requested, atrValues);
+   int count = MathMin(ratesCount, atrCount);
+   if(count < 3)
+      return;
+
+   double stops[];
+   ArrayResize(stops, count);
+   int firstValid = -1;
+   for(int index = 0; index < count; index++)
+     {
+      if(atrValues[index] == EMPTY_VALUE || atrValues[index] <= 0.0)
+        {
+         stops[index] = EMPTY_VALUE;
+         continue;
+        }
+
+      double loss = InpAtrTrailingMultiplier * atrValues[index];
+      if(firstValid < 0)
+        {
+         stops[index] = rates[index].close - loss;
+         firstValid = index;
+         continue;
+        }
+
+      double previousStop = stops[index - 1];
+      if(previousStop == EMPTY_VALUE)
+        {
+         stops[index] = rates[index].close - loss;
+         continue;
+        }
+
+      if(rates[index].close > previousStop &&
+         rates[index - 1].close > previousStop)
+         stops[index] = MathMax(previousStop, rates[index].close - loss);
+      else if(rates[index].close < previousStop &&
+              rates[index - 1].close < previousStop)
+         stops[index] = MathMin(previousStop, rates[index].close + loss);
+      else
+         stops[index] = rates[index].close > previousStop
+                        ? rates[index].close - loss
+                        : rates[index].close + loss;
+     }
+
+   int firstPlot = MathMax(firstValid + 1, count - plotted);
+   for(int index = firstPlot; index < count; index++)
+     {
+      if(stops[index - 1] == EMPTY_VALUE || stops[index] == EMPTY_VALUE)
+         continue;
+      string name = PREFIX + "ATR_STOP_" + IntegerToString(index - firstPlot);
+      if(ObjectFind(0, name) < 0)
+         ObjectCreate(0, name, OBJ_TREND, 0,
+                      rates[index - 1].time, stops[index - 1],
+                      rates[index].time, stops[index]);
+      else
+        {
+         ObjectMove(0, name, 0, rates[index - 1].time, stops[index - 1]);
+         ObjectMove(0, name, 1, rates[index].time, stops[index]);
+        }
+      ObjectSetInteger(0, name, OBJPROP_COLOR, InpAtrTrailingColor);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -615,6 +698,31 @@ bool CanOpenTrade(TrendDirection direction)
   }
 
 //+------------------------------------------------------------------+
+double LatestManagedEntryPrice(TrendDirection direction)
+  {
+   long requiredType = direction == TREND_UP ? POSITION_TYPE_BUY
+                                             : POSITION_TYPE_SELL;
+   long latestTimeMsc = -1;
+   double latestPrice = 0.0;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol ||
+         (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber ||
+         PositionGetInteger(POSITION_TYPE) != requiredType)
+         continue;
+
+      long positionTimeMsc = PositionGetInteger(POSITION_TIME_MSC);
+      if(positionTimeMsc > latestTimeMsc)
+        {
+         latestTimeMsc = positionTimeMsc;
+         latestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+     }
+   return latestPrice;
+  }
+
+//+------------------------------------------------------------------+
 bool SelectManagedPosition(long &positionType)
   {
    if(!PositionSelect(_Symbol) ||
@@ -671,6 +779,10 @@ bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
       Print("Order skipped: previous range stop is inside broker minimum stop distance");
       return false;
      }
+   double risk = MathAbs(entry - sl);
+   double tp = direction == TREND_UP
+               ? entry + InpTakeProfitRiskReward * risk
+               : entry - InpTakeProfitRiskReward * risk;
    string comment = pullbackEntry
                     ? (direction == TREND_UP ? "EMA21 pullback BUY"
                                              : "EMA21 pullback SELL")
@@ -679,68 +791,49 @@ bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
 
    bool opened = direction == TREND_UP
                  ? g_trade.Buy(NormalizeVolume(InpLots), _Symbol, 0.0,
-                               NormalizePrice(sl), 0.0, comment)
+                               NormalizePrice(sl), NormalizePrice(tp), comment)
                  : g_trade.Sell(NormalizeVolume(InpLots), _Symbol, 0.0,
-                                NormalizePrice(sl), 0.0, comment);
+                                NormalizePrice(sl), NormalizePrice(tp), comment);
    if(!opened)
      {
       Print("Order failed: ", g_trade.ResultRetcodeDescription());
       return false;
      }
+   double resultPrice = g_trade.ResultPrice();
+   g_lastEntryPrice = resultPrice > 0.0 ? resultPrice : entry;
    Print("Opened ", comment, "; SL=", DoubleToString(sl, _Digits),
-         "; no take profit or managed exit");
+         "; TP=", DoubleToString(tp, _Digits), "; R:R=1:",
+         DoubleToString(InpTakeProfitRiskReward, 2));
    return true;
   }
 
 //+------------------------------------------------------------------+
-void ProcessEma21PullbackEntry()
+void TrackEma21Touch()
   {
-   if(!InpAllowSameDirectionEntries || !IsWithinEntryHours())
+   if(!InpAllowSameDirectionEntries)
       return;
 
    long positionType;
    if(!SelectManagedPosition(positionType))
      {
-      g_pullbackArmed = false;
+      g_ema21TouchBarBucket = -1;
+      g_lastEntryPrice = 0.0;
       return;
      }
 
    TrendDirection direction = positionType == POSITION_TYPE_BUY
                               ? TREND_UP : TREND_DOWN;
-   if(!CanOpenTrade(direction))
-      return;
-
-   double ema21, ema50, ema100, atr;
-   if(!ReadBufferValue(g_fastEmaHandle, 0, 0, ema21) ||
-      !ReadBufferValue(g_slowEmaHandle, 0, 0, ema50) ||
-      !ReadBufferValue(g_ema100Handle, 0, 0, ema100) ||
-      !ReadBufferValue(g_atrHandle, 0, 1, atr) || atr <= 0.0)
+   double ema21;
+   if(!ReadBufferValue(g_fastEmaHandle, 0, 0, ema21))
       return;
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double price = direction == TREND_UP ? bid : ask;
-   double rearmDistance = InpPullbackRearmAtr * atr;
-   bool movedAway = direction == TREND_UP
-                    ? price > ema21 + rearmDistance
-                    : price < ema21 - rearmDistance;
-   if(!g_pullbackArmed)
-     {
-      if(movedAway)
-         g_pullbackArmed = true;
-      return;
-     }
-
-   bool trendValid = direction == TREND_UP
-                     ? price > ema50 && ema50 > ema100
-                     : price < ema50 && ema50 < ema100;
    bool touchedEma21 = direction == TREND_UP ? price <= ema21
                                              : price >= ema21;
-   if(!trendValid || !touchedEma21)
-      return;
-
-   if(OpenTrade(direction, true))
-      g_pullbackArmed = false;
+   if(touchedEma21)
+      g_ema21TouchBarBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
   }
 
 //+------------------------------------------------------------------+
@@ -831,7 +924,7 @@ void DrawPanel()
             DoubleToString(g_state.atr, digits) + " / " +
             DoubleToString(g_state.buffer, digits),
             x, y + lineHeight * row++, clrSilver);
-   SetLabel(PREFIX + "l7", "Filters:      ADX, EMA21, regime DISABLED; hours " +
+   SetLabel(PREFIX + "l7", "Filters:      ADX/regime DISABLED; hours " +
             (IsWithinEntryHours() ? "OPEN" : "CLOSED"),
             x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l8", "P/EMA21/50/100: " +
@@ -841,7 +934,8 @@ void DrawPanel()
             DoubleToString(g_state.ema100, digits) + " [" +
             (emaPassed ? "PASS" : "FAIL") + "]",
             x, y + lineHeight * row++, emaPassed ? clrLimeGreen : clrOrange);
-   SetLabel(PREFIX + "l9", "Exit:         Initial SL only; additions " +
+   SetLabel(PREFIX + "l9", "Exit:         Initial SL + " +
+            DoubleToString(InpTakeProfitRiskReward, 1) + "R TP; additions " +
             (InpAllowSameDirectionEntries ? "ON" : "OFF"),
             x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l10", "Position:     " + positionText,
@@ -866,6 +960,7 @@ void ProcessSignal()
       return;
 
    DrawChartEmas();
+   DrawAtrTrailingStop();
 
    StructureState state;
    if(!CalculateStructure(state))
@@ -895,9 +990,28 @@ void ProcessSignal()
       return;
    if(!EmaFilterPassed(state))
       return;
-   // Pyramiding additions are handled only by distinct EMA21 pullbacks.
+   // An addition requires an EMA21 touch during this completed candle plus
+   // a fresh range breakout in the existing position's direction.
    if(InpAllowSameDirectionEntries && HasOpenPositionForSymbol())
+     {
+      long closedBarBucket = (long)state.barTime / g_signalPeriodSeconds;
+      if(g_ema21TouchBarBucket != closedBarBucket)
+         return;
+
+      double prospectiveEntry = state.trend == TREND_UP
+                                ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(g_lastEntryPrice <= 0.0)
+         g_lastEntryPrice = LatestManagedEntryPrice(state.trend);
+      if(g_lastEntryPrice <= 0.0 ||
+         MathAbs(prospectiveEntry - g_lastEntryPrice) <
+         InpMinimumEntryGapAtr * state.atr)
+         return;
+
+      OpenTrade(state.trend, true);
+      DrawPanel();
       return;
+     }
    OpenTrade(state.trend);
    DrawPanel();
   }
@@ -915,10 +1029,12 @@ int OnInit()
 
    if(InpBreakoutLookback < 2 || InpAtrPeriod < 1 ||
       InpBreakoutBufferAtr < 0.0 || InpLots <= 0.0 ||
+      InpAtrTrailingMultiplier <= 0.0 ||
+      InpTakeProfitRiskReward <= 0.0 ||
       InpTradeStartHour < 0 || InpTradeStartHour > 23 ||
       InpTradeEndHour < 1 || InpTradeEndHour > 24 ||
       InpTradeStartHour >= InpTradeEndHour ||
-      InpMaximumSameDirectionEntries < 1 || InpPullbackRearmAtr < 0.0)
+      InpMaximumSameDirectionEntries < 1 || InpMinimumEntryGapAtr < 0.0)
       return INIT_PARAMETERS_INCORRECT;
 
    g_atrHandle = iATR(_Symbol, InpSignalTimeframe, InpAtrPeriod);
@@ -938,6 +1054,9 @@ int OnInit()
    // Chart-only EMA handles and objects are unnecessary in Strategy Tester.
    if(!g_isTester)
      {
+      g_chartAtrHandle = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
+      if(g_chartAtrHandle == INVALID_HANDLE)
+         return INIT_FAILED;
       if(!CreateChartEma(21, g_chartEma21Handle) ||
          !CreateChartEma(50, g_chartEma50Handle) ||
          !CreateChartEma(100, g_chartEma100Handle))
@@ -950,8 +1069,7 @@ int OnInit()
    if(!g_isTester)
       EventSetTimer(1);
    ProcessSignal();
-   if(g_isTester)
-      g_lastTesterBarBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
+   g_lastTesterBarBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
    return INIT_SUCCEEDED;
   }
 
@@ -975,6 +1093,8 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_chartEma50Handle);
    if(g_chartEma100Handle != INVALID_HANDLE)
       IndicatorRelease(g_chartEma100Handle);
+   if(g_chartAtrHandle != INVALID_HANDLE)
+      IndicatorRelease(g_chartAtrHandle);
    ObjectsDeleteAll(0, PREFIX);
    ChartRedraw();
   }
@@ -988,19 +1108,16 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   if(g_isTester)
+   // Process the just-completed candle before recording touches for the new
+   // candle, preserving the EMA21-touch + breakout pairing in live and test.
+   long barBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
+   if(barBucket != g_lastTesterBarBucket)
      {
-      // Avoid an iTime()/CopyRates call on every simulated tick. Integer
-      // division detects the first tick in each signal-timeframe candle.
-      long barBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
-      if(barBucket != g_lastTesterBarBucket)
-        {
-         g_lastTesterBarBucket = barBucket;
-         ProcessSignal();
-        }
+      g_lastTesterBarBucket = barBucket;
+      ProcessSignal();
      }
 
-   ProcessEma21PullbackEntry();
+   TrackEma21Touch();
 
   }
 //+------------------------------------------------------------------+
