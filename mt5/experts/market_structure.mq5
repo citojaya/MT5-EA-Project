@@ -25,7 +25,8 @@ input int    InpPivotLeft = 2;                        // Older bars around a piv
 input int    InpPivotRight = 2;                       // Newer closed bars confirming a pivot
 input int    InpPivotLookback = 300;                  // Bars searched for swing points
 input int    InpMaximumSwingAgeBars = 150;            // Maximum age of latest high/low
-input int    InpTradeTrendProjectionBars = 24;        // Frozen trend-line projection
+input int    InpTradeTrendLookback = 50;              // Completed candles searched for trend line
+input int    InpTradeTrendProjectionBars = 48;        // Frozen trend-line projection
 input double InpTradeTrendOffsetAtr = 3.0;             // Entry-to-trend-line gap in ATR
 input color  InpBuyTrendLineColor = clrLimeGreen;     // BUY support trend line
 input color  InpSellTrendLineColor = clrTomato;       // SELL resistance trend line
@@ -718,46 +719,74 @@ bool HasOpenPositionForSymbol()
   }
 
 //+------------------------------------------------------------------+
-bool FindLatestTrendPivots(TrendDirection direction,
-                           SwingPoint &older, SwingPoint &newer)
+bool FindTradeTrendExtremes(TrendDirection direction,
+                            SwingPoint &older, SwingPoint &newer)
   {
-   int requested = InpPivotLookback + InpPivotLeft + InpPivotRight + 2;
+   int requested = InpTradeTrendLookback + 1;
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    int copied = CopyRates(_Symbol, InpSignalTimeframe, 0, requested, rates);
-   if(copied < InpPivotLeft + InpPivotRight + 3)
+   if(copied < requested)
       return false;
 
-   bool newerFound = false;
-   int maximumShift = MathMin(InpPivotLookback, copied - InpPivotLeft - 1);
-   for(int shift = InpPivotRight + 1; shift <= maximumShift; shift++)
+   int firstShift = 1;
+   int secondShift = 2;
+   double firstPrice = direction == TREND_UP ? rates[firstShift].low
+                                             : rates[firstShift].high;
+   double secondPrice = direction == TREND_UP ? rates[secondShift].low
+                                              : rates[secondShift].high;
+   bool secondIsMoreExtreme = direction == TREND_UP
+                              ? secondPrice < firstPrice
+                              : secondPrice > firstPrice;
+   if(secondIsMoreExtreme)
      {
-      bool isPivot = direction == TREND_UP
-                     ? IsPivotLow(rates, copied, shift)
-                     : IsPivotHigh(rates, copied, shift);
-      if(!isPivot)
-         continue;
+      int savedShift = firstShift;
+      double savedPrice = firstPrice;
+      firstShift = secondShift;
+      firstPrice = secondPrice;
+      secondShift = savedShift;
+      secondPrice = savedPrice;
+     }
 
-      SwingPoint point;
-      point.type = direction == TREND_UP ? SWING_LOW : SWING_HIGH;
-      point.time = rates[shift].time;
-      point.price = direction == TREND_UP ? rates[shift].low
-                                          : rates[shift].high;
-      point.shift = shift;
-      if(!newerFound)
+   for(int shift = 3; shift <= InpTradeTrendLookback; shift++)
+     {
+      double price = direction == TREND_UP ? rates[shift].low
+                                           : rates[shift].high;
+      bool isMoreExtreme = direction == TREND_UP ? price < firstPrice
+                                                  : price > firstPrice;
+      if(isMoreExtreme)
         {
-         if(shift > InpMaximumSwingAgeBars)
-            return false;
-         newer = point;
-         newerFound = true;
+         secondPrice = firstPrice;
+         secondShift = firstShift;
+         firstPrice = price;
+         firstShift = shift;
         }
       else
         {
-         older = point;
-         return true;
+         bool isSecondMoreExtreme = direction == TREND_UP
+                                    ? price < secondPrice
+                                    : price > secondPrice;
+         if(isSecondMoreExtreme)
+           {
+            secondPrice = price;
+            secondShift = shift;
+           }
         }
      }
-   return false;
+
+   int olderShift = MathMax(firstShift, secondShift);
+   int newerShift = MathMin(firstShift, secondShift);
+   older.type = direction == TREND_UP ? SWING_LOW : SWING_HIGH;
+   older.time = rates[olderShift].time;
+   older.price = direction == TREND_UP ? rates[olderShift].low
+                                       : rates[olderShift].high;
+   older.shift = olderShift;
+   newer.type = older.type;
+   newer.time = rates[newerShift].time;
+   newer.price = direction == TREND_UP ? rates[newerShift].low
+                                       : rates[newerShift].high;
+   newer.shift = newerShift;
+   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -771,12 +800,13 @@ bool PlotFrozenTradeTrendLine(TrendDirection direction, datetime entryTime,
      }
 
    SwingPoint older, newer;
-   if(!FindLatestTrendPivots(direction, older, newer) ||
+   if(!FindTradeTrendExtremes(direction, older, newer) ||
       newer.time <= older.time)
      {
-      Print("Trade trend line not plotted: two confirmed ",
-            direction == TREND_UP ? "swing lows" : "swing highs",
-            " were not available");
+      Print("Trade trend line not plotted: two ",
+            direction == TREND_UP ? "lowest lows" : "highest highs",
+            " were not available in the previous ",
+            InpTradeTrendLookback, " completed candles");
       return false;
      }
 
@@ -1340,7 +1370,7 @@ int OnInit()
       InpTradeStartHour < 0 || InpTradeStartHour > 23 ||
       InpTradeEndHour < 1 || InpTradeEndHour > 24 ||
       InpTradeStartHour >= InpTradeEndHour ||
-      InpTradeTrendProjectionBars < 1 ||
+      InpTradeTrendLookback < 2 || InpTradeTrendProjectionBars < 1 ||
       InpTradeTrendOffsetAtr < 0.0 ||
       InpProfitableExitBars < 1 ||
       InpTakeProfitAtrMultiplier <= 0.0 ||
