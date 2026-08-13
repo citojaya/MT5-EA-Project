@@ -25,6 +25,9 @@ input int    InpPivotLeft = 2;                        // Older bars around a piv
 input int    InpPivotRight = 2;                       // Newer closed bars confirming a pivot
 input int    InpPivotLookback = 300;                  // Bars searched for swing points
 input int    InpMaximumSwingAgeBars = 150;            // Maximum age of latest high/low
+input int    InpTradeTrendProjectionBars = 24;        // Frozen trend-line projection
+input color  InpBuyTrendLineColor = clrLimeGreen;     // BUY support trend line
+input color  InpSellTrendLineColor = clrTomato;       // SELL resistance trend line
 input int    InpBreakoutLookback = 20;                // Completed candles defining the range
 input int    InpAtrPeriod = 14;                       // ATR period
 input double InpBreakoutBufferAtr = 0.10;             // Break distance beyond range in ATR
@@ -47,9 +50,6 @@ input bool   InpUseRegimeCsv = USE_REGIME_CSV_DEFAULT;// Require CSV/TXT regime 
 input string InpRegimeCsvFile = "";                  // Backtest CSV in Common Files (default=false only)
 input int    InpCsvTimeOffsetHours = 0;               // UTC source time -> broker server time
 input double InpLots = 0.01;                          // Fixed trade volume
-input double InpStopLossAtrMultiplier = 4.0;          // Initial stop distance
-input double InpTakeProfitAtrMultiplier = 6.0;        // Initial target distance
-input double InpTakeProfitRiskReward = 2.0;           // TP as multiple of entry-to-SL risk
 input int    InpTradeStartHour = 1;                   // Server hour, inclusive
 input int    InpTradeEndHour = 22;                    // Server hour, exclusive
 input bool   InpAllowSameDirectionEntries = ALLOW_SAME_DIRECTION_ENTRIES_DEFAULT;
@@ -150,6 +150,13 @@ string   g_currentCsvName = "";
 double   g_currentCsvConfidence = 0.0;
 string   g_regimeCsvFile = "";
 string   g_liveSignalFile = "";
+bool     g_tradeTrendLinePlotted = false;
+bool     g_tradeTrendPriceStateAvailable = false;
+bool     g_tradeTrendPriceWasSafe = false;
+bool     g_tradeTrendExitActive = false;
+TrendDirection g_tradeTrendDirection = TREND_SIDEWAYS;
+
+#define TRADE_TREND_LINE_NAME PREFIX "TRADE_TREND_LINE"
 
 //+------------------------------------------------------------------+
 bool CreateChartEma(const int period, int &handle)
@@ -657,6 +664,227 @@ bool HasOpenPositionForSymbol()
   }
 
 //+------------------------------------------------------------------+
+bool FindLatestTrendPivots(TrendDirection direction,
+                           SwingPoint &older, SwingPoint &newer)
+  {
+   int requested = InpPivotLookback + InpPivotLeft + InpPivotRight + 2;
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int copied = CopyRates(_Symbol, InpSignalTimeframe, 0, requested, rates);
+   if(copied < InpPivotLeft + InpPivotRight + 3)
+      return false;
+
+   bool newerFound = false;
+   int maximumShift = MathMin(InpPivotLookback, copied - InpPivotLeft - 1);
+   for(int shift = InpPivotRight + 1; shift <= maximumShift; shift++)
+     {
+      bool isPivot = direction == TREND_UP
+                     ? IsPivotLow(rates, copied, shift)
+                     : IsPivotHigh(rates, copied, shift);
+      if(!isPivot)
+         continue;
+
+      SwingPoint point;
+      point.type = direction == TREND_UP ? SWING_LOW : SWING_HIGH;
+      point.time = rates[shift].time;
+      point.price = direction == TREND_UP ? rates[shift].low
+                                          : rates[shift].high;
+      point.shift = shift;
+      if(!newerFound)
+        {
+         if(shift > InpMaximumSwingAgeBars)
+            return false;
+         newer = point;
+         newerFound = true;
+        }
+      else
+        {
+         older = point;
+         return true;
+        }
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+bool PlotFrozenTradeTrendLine(TrendDirection direction, datetime entryTime)
+  {
+   if(g_tradeTrendLinePlotted || ObjectFind(0, TRADE_TREND_LINE_NAME) >= 0)
+     {
+      g_tradeTrendLinePlotted = true;
+      return true;
+     }
+
+   SwingPoint older, newer;
+   if(!FindLatestTrendPivots(direction, older, newer) ||
+      newer.time <= older.time)
+     {
+      Print("Trade trend line not plotted: two confirmed ",
+            direction == TREND_UP ? "swing lows" : "swing highs",
+            " were not available");
+      return false;
+     }
+
+   datetime projectionStart = entryTime > newer.time ? entryTime : newer.time;
+   datetime projectionEnd = projectionStart +
+                            InpTradeTrendProjectionBars * g_signalPeriodSeconds;
+   double secondsBetweenPivots = (double)(newer.time - older.time);
+   double slopePerSecond = (newer.price - older.price) / secondsBetweenPivots;
+   double projectedPrice = newer.price +
+                           slopePerSecond * (double)(projectionEnd - newer.time);
+
+   if(!ObjectCreate(0, TRADE_TREND_LINE_NAME, OBJ_TREND, 0,
+                    older.time, older.price, projectionEnd, projectedPrice))
+     {
+      Print("Unable to plot frozen trade trend line. Error ", GetLastError());
+      return false;
+     }
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_COLOR,
+                    direction == TREND_UP ? InpBuyTrendLineColor
+                                          : InpSellTrendLineColor);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_RAY_LEFT, false);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, TRADE_TREND_LINE_NAME, OBJPROP_HIDDEN, true);
+   ObjectSetString(0, TRADE_TREND_LINE_NAME, OBJPROP_TOOLTIP,
+                   direction == TREND_UP
+                   ? "Frozen BUY support trend line"
+                   : "Frozen SELL resistance trend line");
+   g_tradeTrendLinePlotted = true;
+   double currentLinePrice = ObjectGetValueByTime(0, TRADE_TREND_LINE_NAME,
+                                                   TimeCurrent(), 0);
+   double currentPrice = direction == TREND_UP
+                         ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                         : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   g_tradeTrendPriceWasSafe = direction == TREND_UP
+                              ? currentPrice >= currentLinePrice
+                              : currentPrice <= currentLinePrice;
+   g_tradeTrendPriceStateAvailable = currentLinePrice != 0.0;
+   g_tradeTrendDirection = direction;
+   ChartRedraw();
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+void SynchronizeTradeTrendLine()
+  {
+   long positionType = -1;
+   datetime entryTime = 0;
+   long oldestTimeMsc = LONG_MAX;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+
+      long positionTimeMsc = PositionGetInteger(POSITION_TIME_MSC);
+      if(positionTimeMsc < oldestTimeMsc)
+        {
+         oldestTimeMsc = positionTimeMsc;
+         positionType = PositionGetInteger(POSITION_TYPE);
+         entryTime = (datetime)PositionGetInteger(POSITION_TIME);
+        }
+     }
+
+   // Charting deliberately applies to every position on this symbol,
+   // including manually opened trades and trades from other magic numbers.
+   if(positionType != POSITION_TYPE_BUY && positionType != POSITION_TYPE_SELL)
+     {
+      if(g_tradeTrendLinePlotted ||
+         ObjectFind(0, TRADE_TREND_LINE_NAME) >= 0)
+        {
+         ObjectDelete(0, TRADE_TREND_LINE_NAME);
+         ChartRedraw();
+        }
+      g_tradeTrendLinePlotted = false;
+      g_tradeTrendPriceStateAvailable = false;
+      g_tradeTrendPriceWasSafe = false;
+      g_tradeTrendExitActive = false;
+      g_tradeTrendDirection = TREND_SIDEWAYS;
+      return;
+     }
+
+   if(g_tradeTrendLinePlotted || ObjectFind(0, TRADE_TREND_LINE_NAME) >= 0)
+     {
+      g_tradeTrendLinePlotted = true;
+      if(g_tradeTrendDirection == TREND_SIDEWAYS)
+         g_tradeTrendDirection = positionType == POSITION_TYPE_BUY
+                                 ? TREND_UP : TREND_DOWN;
+      return;
+     }
+   TrendDirection direction = positionType == POSITION_TYPE_BUY
+                              ? TREND_UP : TREND_DOWN;
+   PlotFrozenTradeTrendLine(direction, entryTime);
+  }
+
+//+------------------------------------------------------------------+
+bool CloseAllSymbolPositions(const string reason)
+  {
+   bool allClosed = true;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+
+      if(!g_trade.PositionClose(ticket, InpDeviationPoints))
+        {
+         allClosed = false;
+         Print("Failed to close position #", ticket, " (", reason, "): ",
+               g_trade.ResultRetcodeDescription());
+        }
+      else
+         Print("Closed position #", ticket, " (", reason, ")");
+     }
+   return allClosed;
+  }
+
+//+------------------------------------------------------------------+
+void CheckTrendLineExit()
+  {
+   if(!HasOpenPositionForSymbol() ||
+      ObjectFind(0, TRADE_TREND_LINE_NAME) < 0)
+      return;
+
+   datetime now = TimeCurrent();
+   double linePrice = ObjectGetValueByTime(0, TRADE_TREND_LINE_NAME, now, 0);
+   if(linePrice == 0.0)
+      return;
+
+   if(g_tradeTrendDirection != TREND_UP &&
+      g_tradeTrendDirection != TREND_DOWN)
+      return;
+
+   double price = g_tradeTrendDirection == TREND_UP
+                  ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                  : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   bool priceIsSafe = g_tradeTrendDirection == TREND_UP
+                      ? price >= linePrice
+                      : price <= linePrice;
+   if(!g_tradeTrendPriceStateAvailable)
+     {
+      g_tradeTrendPriceWasSafe = priceIsSafe;
+      g_tradeTrendPriceStateAvailable = true;
+      return;
+     }
+
+   bool crossedExitSide = g_tradeTrendPriceWasSafe && !priceIsSafe;
+   g_tradeTrendPriceWasSafe = priceIsSafe;
+   if(crossedExitSide)
+      g_tradeTrendExitActive = true;
+   if(g_tradeTrendExitActive)
+     {
+      string reason = g_tradeTrendDirection == TREND_UP
+                      ? "BUY price dropped below frozen trend line"
+                      : "SELL price crossed above frozen trend line";
+      CloseAllSymbolPositions(reason);
+      SynchronizeTradeTrendLine();
+     }
+  }
+
+//+------------------------------------------------------------------+
 int SameDirectionEntryCount(TrendDirection direction, bool &blocked)
   {
    blocked = false;
@@ -766,23 +994,7 @@ bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double minimumStop = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) *
-                        SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double entry = direction == TREND_UP ? ask : bid;
-   // Use the lowest low/highest high of the completed pre-breakout range.
-   double sl = direction == TREND_UP ? g_state.lowerLimit : g_state.upperLimit;
-   bool stopValid = direction == TREND_UP
-                    ? sl <= bid - minimumStop
-                    : sl >= ask + minimumStop;
-   if(!stopValid)
-     {
-      Print("Order skipped: previous range stop is inside broker minimum stop distance");
-      return false;
-     }
-   double risk = MathAbs(entry - sl);
-   double tp = direction == TREND_UP
-               ? entry + InpTakeProfitRiskReward * risk
-               : entry - InpTakeProfitRiskReward * risk;
    string comment = pullbackEntry
                     ? (direction == TREND_UP ? "EMA21 pullback BUY"
                                              : "EMA21 pullback SELL")
@@ -791,9 +1003,9 @@ bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
 
    bool opened = direction == TREND_UP
                  ? g_trade.Buy(NormalizeVolume(InpLots), _Symbol, 0.0,
-                               NormalizePrice(sl), NormalizePrice(tp), comment)
+                               0.0, 0.0, comment)
                  : g_trade.Sell(NormalizeVolume(InpLots), _Symbol, 0.0,
-                                NormalizePrice(sl), NormalizePrice(tp), comment);
+                                0.0, 0.0, comment);
    if(!opened)
      {
       Print("Order failed: ", g_trade.ResultRetcodeDescription());
@@ -801,9 +1013,9 @@ bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
      }
    double resultPrice = g_trade.ResultPrice();
    g_lastEntryPrice = resultPrice > 0.0 ? resultPrice : entry;
-   Print("Opened ", comment, "; SL=", DoubleToString(sl, _Digits),
-         "; TP=", DoubleToString(tp, _Digits), "; R:R=1:",
-         DoubleToString(InpTakeProfitRiskReward, 2));
+   PlotFrozenTradeTrendLine(direction, TimeCurrent());
+   Print("Opened ", comment,
+         "; exit only when price drops below frozen trend line");
    return true;
   }
 
@@ -934,8 +1146,7 @@ void DrawPanel()
             DoubleToString(g_state.ema100, digits) + " [" +
             (emaPassed ? "PASS" : "FAIL") + "]",
             x, y + lineHeight * row++, emaPassed ? clrLimeGreen : clrOrange);
-   SetLabel(PREFIX + "l9", "Exit:         Initial SL + " +
-            DoubleToString(InpTakeProfitRiskReward, 1) + "R TP; additions " +
+   SetLabel(PREFIX + "l9", "Exit:         BUY below / SELL above frozen line; additions " +
             (InpAllowSameDirectionEntries ? "ON" : "OFF"),
             x, y + lineHeight * row++, clrSilver);
    SetLabel(PREFIX + "l10", "Position:     " + positionText,
@@ -1030,10 +1241,10 @@ int OnInit()
    if(InpBreakoutLookback < 2 || InpAtrPeriod < 1 ||
       InpBreakoutBufferAtr < 0.0 || InpLots <= 0.0 ||
       InpAtrTrailingMultiplier <= 0.0 ||
-      InpTakeProfitRiskReward <= 0.0 ||
       InpTradeStartHour < 0 || InpTradeStartHour > 23 ||
       InpTradeEndHour < 1 || InpTradeEndHour > 24 ||
       InpTradeStartHour >= InpTradeEndHour ||
+      InpTradeTrendProjectionBars < 1 ||
       InpMaximumSameDirectionEntries < 1 || InpMinimumEntryGapAtr < 0.0)
       return INIT_PARAMETERS_INCORRECT;
 
@@ -1069,6 +1280,7 @@ int OnInit()
    if(!g_isTester)
       EventSetTimer(1);
    ProcessSignal();
+   SynchronizeTradeTrendLine();
    g_lastTesterBarBucket = (long)TimeCurrent() / g_signalPeriodSeconds;
    return INIT_SUCCEEDED;
   }
@@ -1102,12 +1314,16 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
   {
+   SynchronizeTradeTrendLine();
+   CheckTrendLineExit();
    ProcessSignal();
   }
 
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   SynchronizeTradeTrendLine();
+   CheckTrendLineExit();
    // Process the just-completed candle before recording touches for the new
    // candle, preserving the EMA21-touch + breakout pairing in live and test.
    long barBucket = (long)TimeCurrent() / g_signalPeriodSeconds;

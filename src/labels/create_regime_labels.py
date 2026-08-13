@@ -12,21 +12,51 @@ from src.data.history_paths import features_dir_for_config, labels_dir_for_confi
 
 
 REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
+    0: "Trade Not Possible",
+    1: "Trade Possible",
 }
 
+HORIZON_BARS = 12
+TAKE_PROFIT_ATR_MULTIPLIER = 3.0
+STOP_LOSS_ATR_MULTIPLIER = 3.0
 
-def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
+
+def first_hit_step(condition: pd.Series) -> int | None:
+    hits = condition.to_numpy().nonzero()[0]
+    return int(hits[0]) if len(hits) else None
+
+
+def target_wins_before_stop(
+    target_step: int | None,
+    stop_step: int | None,
+) -> bool:
+    # If TP and SL occur in the same OHLC candle, their ordering is unknowable.
+    # Treat that collision as a loss to avoid optimistic labels.
+    return target_step is not None and (
+        stop_step is None or target_step < stop_step
+    )
+
+
+def create_regime_labels(
+    df: pd.DataFrame,
+    horizon_bars: int = HORIZON_BARS,
+    take_profit_atr_multiplier: float = TAKE_PROFIT_ATR_MULTIPLIER,
+    stop_loss_atr_multiplier: float = STOP_LOSS_ATR_MULTIPLIER,
+) -> pd.DataFrame:
     df = df.copy()
     df["time"] = pd.to_datetime(df["time"], utc=True)
-    df = df.sort_values("time")
+    df = df.sort_values("time").reset_index(drop=True)
+
+    required_columns = {"time", "high", "low", "close", "atr_14"}
+    missing_columns = required_columns - set(df.columns)
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
+    if horizon_bars <= 0:
+        raise ValueError("horizon_bars must be positive")
+    if take_profit_atr_multiplier <= 0:
+        raise ValueError("take_profit_atr_multiplier must be positive")
+    if stop_loss_atr_multiplier <= 0:
+        raise ValueError("stop_loss_atr_multiplier must be positive")
 
     # ATR percentile over rolling window
     df["atr_pct_rank"] = (
@@ -42,56 +72,39 @@ def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
         .rank(pct=True)
     )
 
-    df["regime"] = 7  # default = Transition
+    labels = pd.Series(pd.NA, index=df.index, dtype="Int64")
+    last_label_index = len(df) - horizon_bars
 
-    strong_bull = (
-        (df["ema_50"] > df["ema_200"]) &
-        (df["ema_50_slope"] > 0) &
-        (df["adx_14"] > 25) &
-        (df["di_plus"] > df["di_minus"])
-    )
+    for index in range(max(0, last_label_index)):
+        entry_price = float(df.at[index, "close"])
+        atr = float(df.at[index, "atr_14"])
+        if pd.isna(atr) or atr <= 0:
+            continue
 
-    weak_bull = (
-        (df["ema_50"] > df["ema_200"]) &
-        (df["adx_14"] >= 15) &
-        (df["adx_14"] <= 25) &
-        (df["di_plus"] > df["di_minus"])
-    )
+        future = df.iloc[index + 1:index + horizon_bars + 1]
+        buy_tp = entry_price + take_profit_atr_multiplier * atr
+        buy_sl = entry_price - stop_loss_atr_multiplier * atr
+        sell_tp = entry_price - take_profit_atr_multiplier * atr
+        sell_sl = entry_price + stop_loss_atr_multiplier * atr
 
-    strong_bear = (
-        (df["ema_50"] < df["ema_200"]) &
-        (df["ema_50_slope"] < 0) &
-        (df["adx_14"] > 25) &
-        (df["di_minus"] > df["di_plus"])
-    )
+        buy_wins = target_wins_before_stop(
+            first_hit_step(future["high"] >= buy_tp),
+            first_hit_step(future["low"] <= buy_sl),
+        )
+        sell_wins = target_wins_before_stop(
+            first_hit_step(future["low"] <= sell_tp),
+            first_hit_step(future["high"] >= sell_sl),
+        )
+        labels.at[index] = int(buy_wins or sell_wins)
 
-    weak_bear = (
-        (df["ema_50"] < df["ema_200"]) &
-        (df["adx_14"] >= 15) &
-        (df["adx_14"] <= 25) &
-        (df["di_minus"] > df["di_plus"])
-    )
-
-    range_market = (
-        (df["adx_14"] < 15) &
-        (df["bb_width_rank"] < 0.40)
-    )
-
-    high_volatility = df["atr_pct_rank"] > 0.80
-    low_volatility = df["atr_pct_rank"] < 0.20
-
-    # Priority order matters
-    df.loc[range_market, "regime"] = 4
-    df.loc[weak_bull, "regime"] = 1
-    df.loc[weak_bear, "regime"] = 3
-    df.loc[strong_bull, "regime"] = 0
-    df.loc[strong_bear, "regime"] = 2
-    df.loc[high_volatility, "regime"] = 5
-    df.loc[low_volatility, "regime"] = 6
+    # Stage 1 predicts opportunity only. A downstream rule/model must choose
+    # long or short direction after the binary filter passes.
+    df["regime"] = labels
 
     df["regime_name"] = df["regime"].map(REGIME_MAP)
 
-    df = df.dropna()
+    df = df.dropna().copy()
+    df["regime"] = df["regime"].astype(int)
 
     return df
 
@@ -150,6 +163,12 @@ def main():
     labelled.to_csv(output_file, index=False)
 
     print(f"Saved regime labels to: {output_file}")
+    print(
+        "Binary outcome: TP "
+        f"{TAKE_PROFIT_ATR_MULTIPLIER:g}x ATR / SL "
+        f"{STOP_LOSS_ATR_MULTIPLIER:g}x ATR / "
+        f"{HORIZON_BARS} forward bars"
+    )
     if args.start and args.end:
         print(f"Date range: {args.start} to {args.end}")
     print()

@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.models.encoded_classifier import EncodedClassifier
 from src.data.history_paths import labels_dir_for_config, models_dir_for_config
+from src.labels.create_regime_labels import HORIZON_BARS
 
 TARGET_COLUMN = "regime"
 EXCLUDED_COLUMNS = {"time", "regime", "regime_name"}
@@ -108,17 +109,21 @@ def chronological_split(
     features: pd.DataFrame,
     target: pd.Series,
     test_size: float = TEST_SIZE,
+    purge_bars: int = HORIZON_BARS,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     if not 0 < test_size < 1:
         raise ValueError("test_size must be between 0 and 1")
 
     split_index = int(len(features) * (1 - test_size))
-    if split_index <= 0 or split_index >= len(features):
+    train_end = split_index - purge_bars
+    if train_end <= 0 or split_index >= len(features):
         raise ValueError("Not enough rows for chronological train/test split")
 
-    x_train = features.iloc[:split_index]
+    # Training labels use the next HORIZON_BARS candles. Purging the boundary
+    # prevents those labels from observing candles assigned to the test set.
+    x_train = features.iloc[:train_end]
     x_test = features.iloc[split_index:]
-    y_train = target.iloc[:split_index]
+    y_train = target.iloc[:train_end]
     y_test = target.iloc[split_index:]
     return x_train, x_test, y_train, y_test
 
@@ -132,14 +137,19 @@ def encode_labels(y: pd.Series) -> tuple[pd.Series, dict[int, int], dict[int, in
 
 
 def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
+    if y_train.nunique() != 2:
+        raise ValueError(
+            "Stage 1 binary training data must contain both Trade Not Possible "
+            "and Trade Possible labels"
+        )
     model = XGBClassifier(
         n_estimators=300,
         max_depth=5,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
-        objective="multi:softprob",
-        eval_metric="mlogloss",
+        objective="binary:logistic",
+        eval_metric="logloss",
         random_state=RANDOM_STATE,
         n_jobs=-1,
     )
@@ -210,8 +220,12 @@ def main() -> None:
     print(f"Date range: {df['time'].min()} to {df['time'].max()}")
     print(f"Train rows: {len(x_train)}")
     print(f"Test rows: {len(x_test)}")
+    print(f"Purged train/test boundary rows: {HORIZON_BARS}")
     print(f"Feature count: {len(feature_columns)}")
-    print("Training stage 1 regime classifier without shuffling time series data...")
+    print(
+        "Training Stage 1 binary tradeability classifier without shuffling "
+        "time series data..."
+    )
 
     model = train_model(x_train, y_train)
     wrapped_model = EncodedClassifier(model, class_to_label)
@@ -220,7 +234,10 @@ def main() -> None:
 
     labels = sorted(set(y_test_real.unique()).union(set(predictions)))
     print()
-    print("Real regime labels used:")
+    print(
+        "Binary tradeability labels used "
+        "(0=Trade Not Possible, 1=Trade Possible):"
+    )
     print(sorted(label_to_class))
     print()
     print("Classification report:")

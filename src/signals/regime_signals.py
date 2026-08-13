@@ -4,14 +4,8 @@ import pandas as pd
 
 
 REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
+    0: "Trade Not Possible",
+    1: "Trade Possible",
 }
 
 
