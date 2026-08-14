@@ -70,6 +70,8 @@ input int              InpFontSize = 10;
 input string           InpFontName = "Consolas";
 
 #define PREFIX "STRUCTURE_EA_"
+#define REGIME_FILTER_TIMEFRAME "M1"
+#define ALLOWED_TRENDING_REGIME 2
 
 enum TrendDirection
   {
@@ -155,6 +157,10 @@ string   g_currentCsvName = "";
 double   g_currentCsvConfidence = 0.0;
 string   g_regimeCsvFile = "";
 string   g_liveSignalFile = "";
+string   g_regimeFilterFile = "";
+bool     g_regimeFilterAvailable = false;
+int      g_regimeFilterValue = -1;
+string   g_regimeFilterTimeframe = REGIME_FILTER_TIMEFRAME;
 bool     g_tradeTrendLinePlotted = false;
 bool     g_tradeTrendPriceStateAvailable = false;
 bool     g_tradeTrendPriceWasSafe = false;
@@ -404,6 +410,65 @@ string CanonicalSymbol(string value)
    if(length >= 2 && StringSubstr(value, length - 2) == ".a")
       value = StringSubstr(value, 0, length - 2);
    return value;
+  }
+
+//+------------------------------------------------------------------+
+//| Read the three-region ML result from this terminal's MQL5\Files. |
+//| The filter fails closed: any missing or invalid value blocks new  |
+//| entries while leaving existing position management unchanged.    |
+//+------------------------------------------------------------------+
+bool UpdateRegimeFilter()
+  {
+   g_regimeFilterAvailable = false;
+   g_regimeFilterValue = -1;
+   g_regimeFilterTimeframe = REGIME_FILTER_TIMEFRAME;
+
+   int handle = FileOpen(g_regimeFilterFile,
+                         FILE_READ | FILE_TXT | FILE_ANSI |
+                         FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   string symbolText = "";
+   string timeframeText = "";
+   string regimeText = "";
+   while(!FileIsEnding(handle))
+     {
+      string line = FileReadString(handle);
+      int separator = StringFind(line, "=");
+      if(separator < 1)
+         continue;
+
+      string key = StringSubstr(line, 0, separator);
+      string value = StringSubstr(line, separator + 1);
+      StringTrimLeft(key);
+      StringTrimRight(key);
+      StringToLower(key);
+      StringTrimLeft(value);
+      StringTrimRight(value);
+
+      if(key == "symbol") symbolText = value;
+      else if(key == "timeframe") timeframeText = value;
+      else if(key == "regime") regimeText = value;
+     }
+   FileClose(handle);
+
+   if(regimeText == "" ||
+      CanonicalSymbol(symbolText) != CanonicalSymbol(_Symbol) ||
+      timeframeText != REGIME_FILTER_TIMEFRAME)
+      return false;
+
+   g_regimeFilterValue = (int)StringToInteger(regimeText);
+   g_regimeFilterTimeframe = timeframeText;
+   g_regimeFilterAvailable = true;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+bool RegimeFilterAllowsTrade()
+  {
+   return g_regimeFilterAvailable &&
+          g_regimeFilterValue == ALLOWED_TRENDING_REGIME;
   }
 
 //+------------------------------------------------------------------+
@@ -1134,7 +1199,7 @@ double NormalizeVolume(double volume)
 //+------------------------------------------------------------------+
 bool OpenTrade(TrendDirection direction, bool pullbackEntry = false)
   {
-   if(!CanOpenTrade(direction))
+   if(!RegimeFilterAllowsTrade() || !CanOpenTrade(direction))
       return false;
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1210,7 +1275,7 @@ void DrawPanel()
    int x = InpXOffset;
    int y = InpYOffset;
    int lineHeight = InpFontSize + 8;
-   SetBackground(PREFIX + "bg", x - 8, y - 8, 560, lineHeight * 13 + 14);
+   SetBackground(PREFIX + "bg", x - 8, y - 8, 560, lineHeight * 14 + 14);
 
    if(!g_stateAvailable)
      {
@@ -1234,7 +1299,8 @@ void DrawPanel()
    bool tradeReady = directionalTrend &&
                       AtrLineFilterPassed(g_state) &&
                       AdxFilterPassed(g_state) &&
-                      IsWithinEntryHours() && CanOpenTrade(g_state.trend);
+                      IsWithinEntryHours() && CanOpenTrade(g_state.trend) &&
+                      RegimeFilterAllowsTrade();
    bool atrLinePassed = AtrLineFilterPassed(g_state);
    bool adxPassed = AdxFilterPassed(g_state);
 
@@ -1284,18 +1350,31 @@ void DrawPanel()
    SetLabel(PREFIX + "l12", "Last bar:     " +
             TimeToString(g_state.barTime, TIME_DATE | TIME_MINUTES),
             x, y + lineHeight * row++, clrGray);
+   string regimeValueText = g_regimeFilterAvailable
+                            ? IntegerToString(g_regimeFilterValue)
+                            : "N/A";
+   SetLabel(PREFIX + "l13", "Regime TF/value: " +
+            g_regimeFilterTimeframe + " / " + regimeValueText + " [" +
+            (RegimeFilterAllowsTrade() ? "PASS" : "BLOCK") + "]",
+            x, y + lineHeight * row++,
+            RegimeFilterAllowsTrade() ? clrLimeGreen : clrOrange);
    ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
 void ProcessSignal()
   {
+   UpdateRegimeFilter();
+
    // Entry signals use completed candles, so there is nothing to recalculate
    // until a new signal-timeframe bar has closed. This avoids doing the full
    // range/indicator calculation on every tester tick or one-second timer.
    datetime closedBarTime = iTime(_Symbol, InpSignalTimeframe, 1);
    if(closedBarTime <= 0 || closedBarTime <= g_lastProcessedBar)
+     {
+      DrawPanel();
       return;
+     }
 
    DrawChartEmas();
    DrawAtrTrailingStop();
@@ -1330,6 +1409,17 @@ void ProcessSignal()
       return;
    if(!AdxFilterPassed(state))
       return;
+   if(!RegimeFilterAllowsTrade())
+     {
+      Print("Trade blocked by ", g_regimeFilterFile,
+            ": expected regime ", ALLOWED_TRENDING_REGIME,
+            ", received ",
+            (g_regimeFilterAvailable
+             ? IntegerToString(g_regimeFilterValue)
+             : "unavailable/invalid"));
+      DrawPanel();
+      return;
+     }
    // An addition requires a fresh range breakout in the existing
    // position's direction and sufficient distance from the latest entry.
    if(InpAllowSameDirectionEntries && HasOpenPositionForSymbol())
@@ -1361,7 +1451,11 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
 
    g_liveSignalFile = "live_signal_" + RegimeFileSymbol() + ".csv";
+   g_regimeFilterFile = "latest_regime_signal_" + _Symbol +
+                        "_" + REGIME_FILTER_TIMEFRAME + ".txt";
    Print("Chart symbol ", Symbol(), ": live signal file=", g_liveSignalFile);
+   Print("Chart symbol ", Symbol(), ": M1 regime filter file=",
+         g_regimeFilterFile);
 
    if(InpBreakoutLookback < 2 || InpAtrPeriod < 1 || InpAdxPeriod < 1 ||
       InpBreakoutBufferAtr < 0.0 || InpLots <= 0.0 ||

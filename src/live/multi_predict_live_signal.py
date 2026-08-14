@@ -24,6 +24,13 @@ from src.signals.regime_signals import generate_regime_signals
 # -----------------------------
 CONFIG_FILE = "config/mt5_config_ICM_DEMO.json"
 
+EXPECTED_REGIME_CLASSES = {0, 1, 2}
+REQUIRED_THREE_REGIME_FEATURES = {
+    "efficiency_ratio_20",
+    "candle_overlap_ratio_20",
+    "ema_compression_atr",
+}
+
 
 MT5_FILES_DIR = Path(
     Path.home() / "AppData/Roaming/MetaQuotes/Terminal/B898126C2AE145320BC9BDE8A1047D6F/MQL5/Files"
@@ -38,6 +45,9 @@ SIGNAL_COLUMNS = [
     "regime",
     "regime_name",
     "confidence",
+    "choppy_probability",
+    "uncertain_probability",
+    "trending_probability",
     "updated_utc",
 ]
 
@@ -136,7 +146,22 @@ def load_model(model_file: Path, feature_columns_file: Path):
     with open(feature_columns_file, "r", encoding="utf-8") as f:
         feature_columns = json.load(f)
 
-    print(f"Model loaded successfully: {model_file}")
+    model_classes = {int(class_id) for class_id in model.classes_}
+    if model_classes != EXPECTED_REGIME_CLASSES:
+        raise ValueError(
+            f"Incompatible regime model at {model_file}: expected classes "
+            f"{sorted(EXPECTED_REGIME_CLASSES)}, found {sorted(model_classes)}. "
+            "Rebuild features and labels, then retrain the three-regime model."
+        )
+
+    missing_features = REQUIRED_THREE_REGIME_FEATURES - set(feature_columns)
+    if missing_features:
+        raise ValueError(
+            f"Incompatible feature list at {feature_columns_file}: missing "
+            f"{sorted(missing_features)}. Retrain the three-regime model."
+        )
+
+    print(f"Three-regime model loaded successfully: {model_file}")
     return model, feature_columns
 
 
@@ -187,6 +212,13 @@ def append_signal_line(signal: dict, signal_file: Path):
     row = {column: signal.get(column, "") for column in SIGNAL_COLUMNS}
 
     if signal_path.exists() and signal_path.stat().st_size > 0:
+        existing_columns = pd.read_csv(signal_path, nrows=0).columns.tolist()
+        if existing_columns != SIGNAL_COLUMNS:
+            raise RuntimeError(
+                f"Existing signal file uses the old schema: {signal_path}. "
+                "Archive or rename it before starting the three-regime predictor."
+            )
+
         try:
             last_row = pd.read_csv(signal_path, usecols=["time", "symbol", "timeframe"]).tail(1)
             if not last_row.empty:
@@ -241,6 +273,9 @@ def predict_live_regime(config, model, feature_columns):
         f"regime={signal['regime']}\n"
         f"regime_name={signal['regime_name']}\n"
         f"confidence={signal['confidence']:.4f}\n"
+        f"choppy_probability={signal['choppy_probability']:.4f}\n"
+        f"uncertain_probability={signal['uncertain_probability']:.4f}\n"
+        f"trending_probability={signal['trending_probability']:.4f}\n"
         f"updated_utc={signal['updated_utc']}\n"
     )
 

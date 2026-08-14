@@ -6,6 +6,7 @@ import sys
 import joblib
 import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -51,6 +52,9 @@ NORMALIZED_FEATURE_COLUMNS = [
     "tick_volume_ratio_20",
     "hour",
     "day_of_week",
+    "efficiency_ratio_20",
+    "candle_overlap_ratio_20",
+    "ema_compression_atr",
 ]
 
 
@@ -143,7 +147,8 @@ def train_model(x_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
         random_state=RANDOM_STATE,
         n_jobs=-1,
     )
-    model.fit(x_train, y_train)
+    sample_weight = compute_sample_weight(class_weight="balanced", y=y_train)
+    model.fit(x_train, y_train, sample_weight=sample_weight)
     return model
 
 

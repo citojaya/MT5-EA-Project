@@ -88,6 +88,37 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_21_slope_pct"] = safe_divide(df["ema_21_slope"], close)
     df["ema_50_slope_pct"] = safe_divide(df["ema_50_slope"], close)
 
+    # Directional efficiency is low when price travels a long path but makes
+    # little net progress, which is a useful definition of a choppy market.
+    path_length_20 = close.diff().abs().rolling(window=20).sum()
+    df["efficiency_ratio_20"] = safe_divide(
+        (close - close.shift(20)).abs(),
+        path_length_20,
+    )
+
+    # Adjacent-candle overlap captures the repeated price-range reuse visible
+    # in congestion.  The rolling value is the fraction of overlapping pairs.
+    overlap_size = (
+        df[["high"]].rename(columns={"high": "current_high"})
+        .assign(previous_high=df["high"].shift(1))
+        .min(axis=1)
+        - df[["low"]].rename(columns={"low": "current_low"})
+        .assign(previous_low=df["low"].shift(1))
+        .max(axis=1)
+    )
+    df["candle_overlap_ratio_20"] = (
+        (overlap_size > 0).astype(float).rolling(window=20).mean()
+    )
+
+    # Normalize moving-average separation by ATR so thresholds transfer more
+    # reliably across symbols, brokers, price levels, and volatility regimes.
+    ema_spread = pd.concat(
+        [df["ema_9"], df["ema_21"], df["ema_50"]], axis=1
+    ).max(axis=1) - pd.concat(
+        [df["ema_9"], df["ema_21"], df["ema_50"]], axis=1
+    ).min(axis=1)
+    df["ema_compression_atr"] = safe_divide(ema_spread, df["atr_14"])
+
     if {"ask", "bid"}.issubset(df.columns):
         spread_price = df["ask"] - df["bid"]
     elif "ask" in df.columns:

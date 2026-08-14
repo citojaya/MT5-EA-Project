@@ -4,14 +4,15 @@ import pandas as pd
 
 
 REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
+    0: "Choppy",
+    1: "Uncertain",
+    2: "Trending",
+}
+
+PROBABILITY_COLUMNS = {
+    0: "choppy_probability",
+    1: "uncertain_probability",
+    2: "trending_probability",
 }
 
 
@@ -39,6 +40,13 @@ def generate_regime_signals(
         class_index = classes.index(regime)
         confidence = float(probabilities[row_index][class_index])
 
+        class_probabilities = {
+            PROBABILITY_COLUMNS[class_id]: float(
+                probabilities[row_index][classes.index(class_id)]
+            )
+            for class_id in REGIME_MAP
+        }
+
         rows.append(
             {
                 "time": row["time"],
@@ -48,6 +56,10 @@ def generate_regime_signals(
                 "regime": regime,
                 "regime_name": REGIME_MAP.get(regime, "Unknown"),
                 "confidence": round(confidence, 6),
+                **{
+                    name: round(value, 6)
+                    for name, value in class_probabilities.items()
+                },
                 "updated_utc": updated_utc,
             }
         )

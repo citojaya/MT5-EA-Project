@@ -12,14 +12,9 @@ from src.data.history_paths import features_dir_for_config, labels_dir_for_confi
 
 
 REGIME_MAP = {
-    0: "Strong Bull Trend",
-    1: "Weak Bull Trend",
-    2: "Strong Bear Trend",
-    3: "Weak Bear Trend",
-    4: "Range",
-    5: "High Volatility",
-    6: "Low Volatility",
-    7: "Transition",
+    0: "Choppy",
+    1: "Uncertain",
+    2: "Trending",
 }
 
 
@@ -42,52 +37,40 @@ def create_regime_labels(df: pd.DataFrame) -> pd.DataFrame:
         .rank(pct=True)
     )
 
-    df["regime"] = 7  # default = Transition
+    required = {
+        "efficiency_ratio_20",
+        "candle_overlap_ratio_20",
+        "ema_compression_atr",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            "Missing three-regime features; rebuild features first: "
+            f"{sorted(missing)}"
+        )
 
-    strong_bull = (
-        (df["ema_50"] > df["ema_200"]) &
-        (df["ema_50_slope"] > 0) &
-        (df["adx_14"] > 25) &
-        (df["di_plus"] > df["di_minus"])
+    # Default ambiguous/borderline observations to Uncertain. Requiring
+    # agreement between independent measurements creates cleaner training
+    # targets than forcing every candle into either chop or trend.
+    df["regime"] = 1
+
+    choppy_score = (
+        (df["adx_14"] < 20).astype(int)
+        + (df["efficiency_ratio_20"] < 0.30).astype(int)
+        + (df["candle_overlap_ratio_20"] >= 0.65).astype(int)
+        + (df["ema_compression_atr"] < 0.60).astype(int)
+        + (df["bb_width_rank"] < 0.45).astype(int)
+    )
+    trending_score = (
+        (df["adx_14"] >= 25).astype(int)
+        + (df["efficiency_ratio_20"] >= 0.40).astype(int)
+        + (df["candle_overlap_ratio_20"] < 0.55).astype(int)
+        + (df["ema_compression_atr"] >= 0.90).astype(int)
+        + ((df["di_plus"] - df["di_minus"]).abs() >= 10).astype(int)
     )
 
-    weak_bull = (
-        (df["ema_50"] > df["ema_200"]) &
-        (df["adx_14"] >= 15) &
-        (df["adx_14"] <= 25) &
-        (df["di_plus"] > df["di_minus"])
-    )
-
-    strong_bear = (
-        (df["ema_50"] < df["ema_200"]) &
-        (df["ema_50_slope"] < 0) &
-        (df["adx_14"] > 25) &
-        (df["di_minus"] > df["di_plus"])
-    )
-
-    weak_bear = (
-        (df["ema_50"] < df["ema_200"]) &
-        (df["adx_14"] >= 15) &
-        (df["adx_14"] <= 25) &
-        (df["di_minus"] > df["di_plus"])
-    )
-
-    range_market = (
-        (df["adx_14"] < 15) &
-        (df["bb_width_rank"] < 0.40)
-    )
-
-    high_volatility = df["atr_pct_rank"] > 0.80
-    low_volatility = df["atr_pct_rank"] < 0.20
-
-    # Priority order matters
-    df.loc[range_market, "regime"] = 4
-    df.loc[weak_bull, "regime"] = 1
-    df.loc[weak_bear, "regime"] = 3
-    df.loc[strong_bull, "regime"] = 0
-    df.loc[strong_bear, "regime"] = 2
-    df.loc[high_volatility, "regime"] = 5
-    df.loc[low_volatility, "regime"] = 6
+    df.loc[(choppy_score >= 3) & (choppy_score > trending_score), "regime"] = 0
+    df.loc[(trending_score >= 3) & (trending_score > choppy_score), "regime"] = 2
 
     df["regime_name"] = df["regime"].map(REGIME_MAP)
 
