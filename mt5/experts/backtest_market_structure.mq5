@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
-//|                                           live_ema_regime.mq5    |
-//| Market-structure EA: HH/HL, LH/LL, or sideways.                 |
+//|                              backtest_market_structure.mq5      |
+//| Market-structure EA with historical M1 ML regime filtering.     |
 //+------------------------------------------------------------------+
 #property copyright "Candlestick"
-#property version   "2.00"
+#property version   "2.10"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -50,7 +50,7 @@ input color  InpEma100Color = clrMagenta;              // EMA(100) chart colour
 input double InpAtrTrailingMultiplier = 3.0;           // ATR trailing-stop distance
 input color  InpAtrTrailingColor = clrRed;             // ATR trailing-stop chart colour
 input bool   InpUseRegimeCsv = USE_REGIME_CSV_DEFAULT;// Require CSV/TXT regime confirmation
-input string InpRegimeCsvFile = "";                  // Backtest CSV in Common Files (default=false only)
+input string InpRegimeCsvFile = "XAUUSD_M1_backtest_signals.csv"; // M1 signals in Common Files
 input int    InpCsvTimeOffsetHours = 0;               // UTC source time -> broker server time
 input double InpLots = 0.01;                          // Fixed trade volume
 input int    InpTradeStartHour = 1;                   // Server hour, inclusive
@@ -425,6 +425,34 @@ bool UpdateRegimeFilter()
    g_regimeFilterTimeframe = REGIME_FILTER_TIMEFRAME;
    g_regimeFilterName = "";
 
+   if(g_isTester)
+     {
+      datetime completedM1Time = iTime(_Symbol, PERIOD_M1, 1);
+      int left = 0;
+      int right = ArraySize(g_csvSignals) - 1;
+      int selected = -1;
+      while(left <= right)
+        {
+         int middle = left + (right - left) / 2;
+         if(g_csvSignals[middle].time <= completedM1Time)
+           {
+            selected = middle;
+            left = middle + 1;
+           }
+         else
+            right = middle - 1;
+        }
+
+      if(selected < 0 ||
+         g_csvSignals[selected].time != completedM1Time)
+         return false;
+
+      g_regimeFilterValue = g_csvSignals[selected].regime;
+      g_regimeFilterName = g_csvSignals[selected].name;
+      g_regimeFilterAvailable = true;
+      return true;
+     }
+
    int handle = FileOpen(g_regimeFilterFile,
                          FILE_READ | FILE_TXT | FILE_ANSI |
                          FILE_SHARE_READ | FILE_SHARE_WRITE);
@@ -578,12 +606,13 @@ bool LoadRegimeCsv()
       return false;
      }
 
-   // time,symbol,timeframe,close,regime,regime_name,confidence,updated_utc
-   for(int column = 0; column < 8 && !FileIsEnding(handle); column++)
+   // time,symbol,timeframe,close,regime,regime_name,confidence,
+   // choppy_probability,uncertain_probability,trending_probability,updated_utc
+   for(int column = 0; column < 11 && !FileIsEnding(handle); column++)
       FileReadString(handle);
 
    string wantedSymbol = CanonicalSymbol(_Symbol);
-   string wantedTimeframe = TimeframeText();
+   string wantedTimeframe = REGIME_FILTER_TIMEFRAME;
    while(!FileIsEnding(handle))
      {
       string timeText = FileReadString(handle);
@@ -593,6 +622,9 @@ bool LoadRegimeCsv()
       string regimeText = FileReadString(handle);
       string regimeName = FileReadString(handle);
       string confidenceText = FileReadString(handle);
+      FileReadString(handle); // choppy_probability
+      FileReadString(handle); // uncertain_probability
+      FileReadString(handle); // trending_probability
       FileReadString(handle); // updated_utc
 
       datetime signalTime = ParseCsvTime(timeText);
@@ -1292,7 +1324,7 @@ void SetLabel(string name, string text, int x, int y, color clr, int size = -1)
 //+------------------------------------------------------------------+
 void DrawPanel()
   {
-   if(!InpShowPanel || g_isTester)
+   if(!InpShowPanel)
       return;
    int x = InpXOffset;
    int y = InpYOffset;
@@ -1474,11 +1506,17 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
 
    g_liveSignalFile = "live_signal_" + RegimeFileSymbol() + ".csv";
-   g_regimeFilterFile = "latest_regime_" + RegimeFileSymbol() +
-                        "_" + REGIME_FILTER_TIMEFRAME + ".txt";
-   Print("Chart symbol ", Symbol(), ": live signal file=", g_liveSignalFile);
-   Print("Chart symbol ", Symbol(), ": M1 regime filter file=",
-         g_regimeFilterFile);
+   g_regimeCsvFile = InpRegimeCsvFile;
+   g_regimeFilterFile = InpRegimeCsvFile;
+   Print("Strategy Tester M1 regime CSV: Common Files\\", g_regimeCsvFile);
+
+   if(!g_isTester)
+     {
+      Print("backtest_market_structure.mq5 is intended for MT5 Strategy Tester.");
+      return INIT_FAILED;
+     }
+   if(!LoadRegimeCsv())
+      return INIT_FAILED;
 
    if(InpBreakoutLookback < 2 || InpAtrPeriod < 1 || InpAdxPeriod < 1 ||
       InpBreakoutBufferAtr < 0.0 || InpLots <= 0.0 ||
