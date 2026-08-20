@@ -5,21 +5,20 @@ This project contains two related M5 trend-alignment Expert Advisors:
 - `mt5/experts/market_structure.mq5` — live-chart EA.
 - `mt5/experts/backtester_market_structure.mq5` — MT5 Strategy Tester EA with optional visual trading buttons.
 
-Both EAs use the same automated trading logic. They do not read M1 regime text or CSV files.
+The live EA requires regime `2` from its M1 text signal. The backtester does not read an external signal file.
 
 ## Timeframes
 
-Automated entries are based on completed M5 candles. `InpSignalTimeframe` must be `PERIOD_M5`; initialization fails if another value is selected.
+The live EA remains fixed to completed M5 candles. The backtester uses two selectable filters: `InpLowTimeframe` (`M5` by default) and `InpHighTimeframe` (`H1` by default). Both timeframes must independently pass the same directional price/EMA/ATR rules. Entry timing, structural swing stop, take-profit ATR, and ATR-side latch use the low timeframe.
 
-The strategy also calculates an ATR trailing line from completed H1 data. The H1 line is used as an additional entry filter and as a real-time directional exit.
+All active signal calculations use completed M5 candles. M1 and H1 candles are not used.
 
-## M5 direction signal
+## Entry direction signal
 
 Direction is evaluated from the latest completed M5 candle. Higher-high, lower-low, range-high, and range-low breakouts are not required.
 
-- Buy direction: M5 close is above both the M5 ATR trailing line and M5 EMA(21).
-- Sell direction: M5 close is below both the M5 ATR trailing line and M5 EMA(21).
-- If the two indicators do not agree, there is no directional signal.
+- Buy direction: `M5 close > EMA(21) > EMA(50) > EMA(100)` and the close is above the M5 ATR trailing line.
+- Sell direction: `M5 close < EMA(21) < EMA(50) < EMA(100)` and the close is below the M5 ATR trailing line.
 
 ## Automated order-entry rules
 
@@ -27,25 +26,21 @@ An automated order is considered once per newly completed M5 candle. Every appli
 
 ### Automated buy
 
-1. M5 ATR and EMA(21) select buy direction.
+1. `M5 close > EMA(21) > EMA(50) > EMA(100)` on the completed candle.
 2. `InpTradeDirectionMode` permits buys.
 3. The completed M5 close is above the M5 ATR trailing line.
-4. The completed M5 close is above the H1 ATR trailing line.
-5. The completed M5 close is above EMA(21) calculated on M5.
-6. ADX is at least `InpMinimumTrendAdx` (`20` by default) when `InpUseAdxFilter` is enabled.
-7. Broker/server time is at or after `InpTradeStartHour` and before `InpTradeEndHour` (01:00–22:00 by default).
-8. Existing-position and additional-entry rules permit a new order.
+4. ADX is at least `InpMinimumTrendAdx` (`20` by default) when `InpUseAdxFilter` is enabled.
+5. Broker/server time is at or after `InpTradeStartHour` and before `InpTradeEndHour` (01:00–22:00 by default).
+6. Existing-position and additional-entry rules permit a new order.
 
 ### Automated sell
 
-1. M5 ATR and EMA(21) select sell direction.
+1. `M5 close < EMA(21) < EMA(50) < EMA(100)` on the completed candle.
 2. `InpTradeDirectionMode` permits sells.
 3. The completed M5 close is below the M5 ATR trailing line.
-4. The completed M5 close is below the H1 ATR trailing line.
-5. The completed M5 close is below EMA(21) calculated on M5.
-6. The same ADX, time, and position rules pass.
+4. The same ADX, time, and position rules pass.
 
-Equality with an EMA or ATR line does not pass the directional filter.
+Equality with an ATR line does not pass the directional filter.
 
 ## Direction selector
 
@@ -66,7 +61,7 @@ When same-direction entries are enabled:
 - Existing positions must use this EA's magic number and match the requested direction.
 - A foreign-magic, manual, or opposite position blocks the addition.
 - The number of entries is limited by `InpMaximumSameDirectionEntries` (`5` by default).
-- Every addition still requires continued M5 ATR/EMA alignment and all entry filters.
+- Every addition still requires continued EMA-stack/M5-ATR alignment and all entry filters.
 - The prospective entry must be at least `InpMinimumEntryGapAtr × M5 ATR` from the latest managed entry (`2 × ATR` by default).
 
 ## Market-order settings
@@ -74,8 +69,8 @@ When same-direction entries are enabled:
 - Volume: `InpLots` (`0.01` by default).
 - Buy orders execute at market Ask.
 - Sell orders execute at market Bid.
-- No broker-side stop loss is attached.
-- Take profit is placed `InpTakeProfitAtrMultiplier × M5 ATR` from entry (`60 × ATR` by default).
+- Buy stop loss is fixed at the most recent confirmed M5 lower low; sell stop loss is fixed at the most recent confirmed M5 higher high.
+- Take profit is placed `InpTakeProfitAtrMultiplier × M5 ATR` from entry (`5 × ATR` by default).
 - Maximum deviation is `InpDeviationPoints` (`20` points by default).
 - Automated orders use `InpMagicNumber`.
 
@@ -83,31 +78,12 @@ The EAs do not place `BUY_STOP`, `SELL_STOP`, or stop-limit protection orders.
 
 ## Closing rules
 
-### H1 ATR directional exit
+There are only two automatic closing mechanisms:
 
-This rule is evaluated continuously using current Bid and the latest calculated H1 ATR line:
+- Broker-side take profit at `5 × M5 ATR` from entry.
+- Fixed structural stop loss at the confirmed M5 lower low for buys or higher high for sells.
 
-- `Bid > H1 ATR line` — close every sell position on the chart symbol.
-- `Bid < H1 ATR line` — close every buy position on the chart symbol.
-- `Bid == H1 ATR line` — take no action.
-
-This exit applies regardless of magic number or origin. It can therefore close manual positions and positions opened by other EAs on the same symbol.
-
-### Take profit
-
-Each automated entry has a broker-side take profit at `InpTakeProfitAtrMultiplier × M5 ATR` from its entry price.
-
-### Profitable-age exit
-
-After `InpProfitableExitBars` completed M5 candles (`240` by default), a position is closed only when its current profit is positive. This rule applies only to positions matching the chart symbol and `InpMagicNumber`.
-
-### Rules that are not active
-
-- No trend-line exit or trend-line plotting.
-- No EMA crossover exit.
-- No M1 regime exit.
-- No opposite-breakout close or automatic reversal.
-- No daily close-all rule in these two current EAs.
+Break-even, profitable-age, ATR-crossover market close, H1 close, trend-line close, EMA crossover close, opposite-breakout close, reversal, regime exit, and daily close-all rules are disabled.
 
 ## Pending-order cleanup
 
@@ -120,7 +96,7 @@ Although the EAs no longer place pending stop orders, they retain the requested 
 
 ## Live EA behavior
 
-`market_structure.mq5` runs on a normal chart. It recalculates the M5 strategy after each completed M5 candle and evaluates position exits during ticks and its timer cycle.
+`market_structure.mq5` runs on a normal chart and recalculates the strategy after each completed M5 candle. It requires `latest_regime_{base-symbol}_M1.txt` in the terminal MQL5 Files directory and permits entries only when that file reports `regime=2`.
 
 It also writes its market-structure direction to:
 
@@ -132,7 +108,11 @@ This output is informational and is not read back as an entry condition.
 
 ## Strategy Tester EA
 
-`backtester_market_structure.mq5` refuses to initialize outside MT5 Strategy Tester. It does not require external signal files.
+`backtester_market_structure.mq5` refuses to initialize outside MT5 Strategy Tester and does not read an external signal file. `InpLowTimeframe` and `InpHighTimeframe` can be changed to two different valid MT5 timeframes.
+
+For a buy, both completed timeframe closes must independently satisfy `close > EMA(21) > EMA(50) > EMA(100)` and be above their respective ATR trailing lines. For a sell, both must satisfy `close < EMA(21) < EMA(50) < EMA(100)` and be below their respective ATR lines. The buy stop is the most recent confirmed lower-timeframe lower low; the sell stop is the most recent confirmed lower-timeframe higher high. The structural stop is not trailed.
+
+The tester permits only one entry per M5 ATR side. After opening a buy above the ATR line, another buy is blocked until a completed M5 close moves below the ATR line. After opening a sell below the ATR line, another sell is blocked until a completed M5 close moves above it. This latch also applies to visual tester BUY/SELL buttons.
 
 When Visual Mode and `InpShowPanel` are enabled, four chart buttons are available:
 
@@ -143,15 +123,15 @@ When Visual Mode and `InpShowPanel` are enabled, four chart buttons are availabl
 
 ### Manual BUY/SELL buttons
 
-Manual button entries use `InpLots`, `InpMagicNumber`, and the normal ATR-based take profit when indicator data is available. They bypass the automated range-breakout, ADX, trading-hours, M5 ATR-line, and automated position-count rules.
+Manual button entries use `InpLots`, `InpMagicNumber`, the confirmed structural swing as stop loss, and the `5 × ATR` take profit. They bypass ADX, trading-hours, and automated position-count rules.
 
 They still require:
 
 - The selected direction to be allowed by `InpTradeDirectionMode`.
-- Manual BUY Ask to be above the latest completed M5 EMA(21).
-- Manual SELL Bid to be below the latest completed M5 EMA(21).
-- Manual BUY Ask to be above the H1 ATR line.
-- Manual SELL Bid to be below the H1 ATR line.
+- For manual BUY: `EMA(21) > EMA(50) > EMA(100)` and the latest completed M5 close is above the M5 ATR line.
+- For manual SELL: `EMA(21) < EMA(50) < EMA(100)` and the latest completed M5 close is below the M5 ATR line.
+
+The eligibility comparison uses the completed M5 close; the accepted order still executes at the current market Ask or Bid.
 
 If Visual Tester does not deliver a chart-click event, the EA also polls button state on each simulated tick. A button clicked while testing is paused executes on the first tick after the test resumes.
 
@@ -167,10 +147,10 @@ These controls ignore magic number and position origin.
 The panel reports:
 
 - Chart symbol and M5 timeframe.
-- Current M5 ATR/EMA direction and reason.
+- Current EMA-stack/M5-ATR direction and reason.
 - Range high, range low, width, ATR, and breakout buffer.
 - ADX and trading-hours status.
-- M5 price versus the M5 ATR line.
+- Completed M5 close versus the M5 ATR line.
 - Position and automated-order readiness.
 - Latest completed M5 candle.
 
@@ -180,7 +160,7 @@ M1 regime information is no longer read or displayed.
 
 Some legacy inputs remain declared but do not currently alter automated entry decisions:
 
-- `InpUseEma21` and `InpUseEma50` — EMA(21) is mandatory regardless of these switches; EMA(50) is not an active entry filter.
+- `InpUseEma21` and `InpUseEma50` — the switches are inactive because EMA(21), EMA(50), and EMA(100) alignment is mandatory.
 - `InpFastEmaPeriod` and `InpSlowEmaPeriod` — indicator handles currently use fixed periods 21 and 50.
 - `InpRequireConsolidation`, `InpMaximumRangeAtr`, and `InpMaximumPreBreakoutAdx`.
 - `InpSidewaysAdx`.

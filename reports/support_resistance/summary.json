@@ -1,0 +1,18 @@
+{
+  "start_date": "2026-01-01",
+  "end_date": "2026-12-31",
+  "entries": 104,
+  "closed_trades": 104,
+  "wins": 76,
+  "losses": 28,
+  "win_rate": 0.7307692307692307,
+  "total_pnl_points": 1391.379999999985,
+  "trade_possible_activations": 105,
+  "signals_blocked_by_6_atr_gap": 2795,
+  "input": "data\\raw\\ICMarketsAU-Demo\\XAUUSD_bidask_M5_20260101_20261231.csv",
+  "atr_period": 14,
+  "atr_multiplier": 3.0,
+  "support_proximity_atr": 0.2,
+  "minimum_buy_gap_atr": 6.0,
+  "volume": 0.01
+}
