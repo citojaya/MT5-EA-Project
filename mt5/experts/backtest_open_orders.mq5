@@ -8,17 +8,24 @@
 
 #include <Trade/Trade.mqh>
 
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M5;     // Analysis timeframe
 input int    InpAtrPeriod = 14;                    // M5 ATR period
 input double InpAtrMultiplier = 3.0;               // M5 ATR-line multiplier
-input double InpTakeProfitAtrMultiplier = 3.0;     // BUY take profit in M5 ATR
 input double InpLots = 0.01;                       // BUY volume per signal
-input int    InpSellStopOffsetPoints = 1;          // SELL STOP distance below EMA100
 input int    InpDeviationPoints = 20;              // Maximum market-order deviation
 input ulong  InpMagicNumber = 44444444;            // EA magic number
 input color  InpEma21Color = clrYellow;            // EMA21 colour
 input color  InpEma50Color = clrDodgerBlue;        // EMA50 colour
 input color  InpEma100Color = clrMagenta;          // EMA100 colour
 input color  InpAtrColor = clrRed;                 // M5 ATR-line colour
+input int    InpOrderBlockLookback = 10;           // Structure-break lookback bars
+input int    InpOrderBlockSearch = 8;              // Opposing-candle search bars
+input double InpOrderBlockDisplacementAtr = 1.0;   // Minimum breakout body in ATR
+input int    InpOrderBlockHistory = 500;            // Closed M5 bars to scan
+input int    InpOrderBlockMaxVisible = 6;           // Maximum active blocks shown
+input int    InpOrderBlockProjectionBars = 100;     // Rectangle projection bars
+input color  InpBullishOrderBlockColor = clrSeaGreen;
+input color  InpBearishOrderBlockColor = clrIndianRed;
 input ENUM_BASE_CORNER InpPanelCorner = CORNER_LEFT_UPPER;
 input int    InpPanelX = 15;
 input int    InpPanelY = 15;
@@ -26,11 +33,14 @@ input int    InpFontSize = 10;
 input string InpFontName = "Consolas";
 
 #define PREFIX "BACKTEST_OPEN_ORDERS_"
-#define HEDGE_COMMENT "EMA100 SELL STOP hedge"
+#define HEDGE_COMMENT "EMA bearish hedge"
 #define BUTTON_BUY PREFIX "BUTTON_BUY"
 #define BUTTON_SELL PREFIX "BUTTON_SELL"
 #define BUTTON_CLOSE_BUY PREFIX "BUTTON_CLOSE_BUY"
 #define BUTTON_CLOSE_SELL PREFIX "BUTTON_CLOSE_SELL"
+#define BUTTON_CLOSE_SELECTED PREFIX "BUTTON_CLOSE_SELECTED"
+#define POSITION_BUTTON_PREFIX PREFIX "POSITION_"
+#define ORDER_BLOCK_PREFIX PREFIX "OB_"
 
 CTrade   g_trade;
 int      g_atrHandle = INVALID_HANDLE;
@@ -45,6 +55,47 @@ double   g_ema50 = 0.0;
 double   g_ema100 = 0.0;
 double   g_lastClose = 0.0;
 bool     g_buyArmed = true;
+bool     g_hadBuyPositions = false;
+ulong    g_selectedTickets[];
+string   g_nearestBullishBlock = "none";
+string   g_nearestBearishBlock = "none";
+
+//+------------------------------------------------------------------+
+int SelectedTicketIndex(const ulong ticket)
+  {
+   for(int index = 0; index < ArraySize(g_selectedTickets); index++)
+      if(g_selectedTickets[index] == ticket)
+         return index;
+   return -1;
+  }
+
+//+------------------------------------------------------------------+
+bool IsTicketSelected(const ulong ticket)
+  {
+   return SelectedTicketIndex(ticket) >= 0;
+  }
+
+//+------------------------------------------------------------------+
+void ToggleSelectedTicket(const ulong ticket)
+  {
+   int selectedIndex = SelectedTicketIndex(ticket);
+   if(selectedIndex < 0)
+     {
+      int size = ArraySize(g_selectedTickets);
+      ArrayResize(g_selectedTickets, size + 1);
+      g_selectedTickets[size] = ticket;
+      return;
+     }
+   int last = ArraySize(g_selectedTickets) - 1;
+   g_selectedTickets[selectedIndex] = g_selectedTickets[last];
+   ArrayResize(g_selectedTickets, last);
+  }
+
+//+------------------------------------------------------------------+
+string PositionButtonName(const ulong ticket)
+  {
+   return POSITION_BUTTON_PREFIX + IntegerToString((long)ticket);
+  }
 
 //+------------------------------------------------------------------+
 double NormalizeVolume(const double requestedVolume)
@@ -75,7 +126,7 @@ void DrawEma(const int handle, const string tag, const color lineColor)
    const int requested = 300;
    datetime times[];
    double values[];
-   int count = MathMin(CopyTime(_Symbol, PERIOD_M5, 0, requested, times),
+   int count = MathMin(CopyTime(_Symbol, InpTimeframe, 0, requested, times),
                        CopyBuffer(handle, 0, 0, requested, values));
    if(count < 2)
       return;
@@ -106,7 +157,7 @@ bool CalculateAndDrawAtrLine(double &currentLine)
    const int requested = 600;
    MqlRates rates[];
    double atrValues[];
-   int ratesCount = CopyRates(_Symbol, PERIOD_M5, 0, requested, rates);
+   int ratesCount = CopyRates(_Symbol, InpTimeframe, 0, requested, rates);
    if(ratesCount < 3)
       return false;
    int atrCount = CopyBuffer(g_atrHandle, 0, 0, ratesCount, atrValues);
@@ -178,6 +229,148 @@ bool CalculateAndDrawAtrLine(double &currentLine)
   }
 
 //+------------------------------------------------------------------+
+void DrawOrderBlocks()
+  {
+   ObjectsDeleteAll(0, ORDER_BLOCK_PREFIX);
+   g_nearestBullishBlock = "none";
+   g_nearestBearishBlock = "none";
+
+   int requested = MathMax(InpOrderBlockHistory,
+                           InpOrderBlockLookback + InpOrderBlockSearch + 20);
+   MqlRates rates[];
+   double atrValues[];
+   int ratesCount = CopyRates(_Symbol, InpTimeframe, 1, requested, rates);
+   int atrCount = CopyBuffer(g_atrHandle, 0, 1, ratesCount, atrValues);
+   int count = MathMin(ratesCount, atrCount);
+   if(count <= InpOrderBlockLookback + 2)
+      return;
+
+   datetime projectionEnd = iTime(_Symbol, InpTimeframe, 0) +
+                            PeriodSeconds(InpTimeframe) *
+                            InpOrderBlockProjectionBars;
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double nearestBullDistance = DBL_MAX;
+   double nearestBearDistance = DBL_MAX;
+   int visible = 0;
+
+   for(int breakout = count - 1;
+       breakout >= InpOrderBlockLookback &&
+       visible < InpOrderBlockMaxVisible;
+       breakout--)
+     {
+      if(atrValues[breakout] == EMPTY_VALUE || atrValues[breakout] <= 0.0)
+         continue;
+      double priorHigh = -DBL_MAX;
+      double priorLow = DBL_MAX;
+      for(int index = breakout - InpOrderBlockLookback;
+          index < breakout; index++)
+        {
+         priorHigh = MathMax(priorHigh, rates[index].high);
+         priorLow = MathMin(priorLow, rates[index].low);
+        }
+      double body = MathAbs(rates[breakout].close - rates[breakout].open);
+      bool bullishBreak = rates[breakout].close > priorHigh &&
+                          rates[breakout].close > rates[breakout].open &&
+                          body >= InpOrderBlockDisplacementAtr *
+                                  atrValues[breakout];
+      bool bearishBreak = rates[breakout].close < priorLow &&
+                          rates[breakout].close < rates[breakout].open &&
+                          body >= InpOrderBlockDisplacementAtr *
+                                  atrValues[breakout];
+      if(!bullishBreak && !bearishBreak)
+         continue;
+
+      int blockIndex = -1;
+      int firstSearch = MathMax(0, breakout - InpOrderBlockSearch);
+      for(int index = breakout - 1; index >= firstSearch; index--)
+        {
+         bool opposing = bullishBreak
+                         ? rates[index].close < rates[index].open
+                         : rates[index].close > rates[index].open;
+         if(opposing)
+           {
+            blockIndex = index;
+            break;
+           }
+        }
+      if(blockIndex < 0)
+         continue;
+
+      double blockHigh = rates[blockIndex].high;
+      double blockLow = rates[blockIndex].low;
+      bool invalidated = false;
+      bool mitigated = false;
+      for(int index = breakout + 1; index < count; index++)
+        {
+         if(bullishBreak)
+           {
+            if(rates[index].close < blockLow)
+              {
+               invalidated = true;
+               break;
+              }
+            if(rates[index].low <= blockHigh)
+               mitigated = true;
+           }
+         else
+           {
+            if(rates[index].close > blockHigh)
+              {
+               invalidated = true;
+               break;
+              }
+            if(rates[index].high >= blockLow)
+               mitigated = true;
+           }
+        }
+      if(invalidated)
+         continue;
+
+      string direction = bullishBreak ? "BULL" : "BEAR";
+      string name = ORDER_BLOCK_PREFIX + direction + "_" +
+                    IntegerToString((long)rates[blockIndex].time);
+      if(ObjectFind(0, name) >= 0)
+         continue;
+      if(!ObjectCreate(0, name, OBJ_RECTANGLE, 0, rates[blockIndex].time,
+                       blockHigh, projectionEnd, blockLow))
+         continue;
+      color blockColor = bullishBreak ? InpBullishOrderBlockColor
+                                      : InpBearishOrderBlockColor;
+      ObjectSetInteger(0, name, OBJPROP_COLOR, blockColor);
+      ObjectSetInteger(0, name, OBJPROP_FILL, true);
+      ObjectSetInteger(0, name, OBJPROP_BACK, true);
+      ObjectSetInteger(0, name, OBJPROP_STYLE,
+                       mitigated ? STYLE_DOT : STYLE_SOLID);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, mitigated ? 1 : 2);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, name, OBJPROP_TOOLTIP,
+                      direction + " order block | " +
+                      (mitigated ? "MITIGATED" : "FRESH") + " | " +
+                      DoubleToString(blockLow, _Digits) + " - " +
+                      DoubleToString(blockHigh, _Digits));
+      visible++;
+
+      double distance = currentPrice < blockLow ? blockLow - currentPrice
+                        : currentPrice > blockHigh ? currentPrice - blockHigh
+                        : 0.0;
+      string summary = DoubleToString(blockLow, _Digits) + "-" +
+                       DoubleToString(blockHigh, _Digits) + " " +
+                       (mitigated ? "mitigated" : "fresh");
+      if(bullishBreak && distance < nearestBullDistance)
+        {
+         nearestBullDistance = distance;
+         g_nearestBullishBlock = summary;
+        }
+      else if(bearishBreak && distance < nearestBearDistance)
+        {
+         nearestBearDistance = distance;
+         g_nearestBearishBlock = summary;
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 void RemoveIndicatorSubwindows()
   {
    int windows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
@@ -243,6 +436,11 @@ bool CloseAllSellPositions()
       if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol ||
          PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL)
          continue;
+      if(PositionGetDouble(POSITION_PROFIT) <= 0.0)
+        {
+         Print("Keeping non-profitable SELL position #", ticket);
+         continue;
+        }
       if(!g_trade.PositionClose(ticket, InpDeviationPoints))
         {
          allClosed = false;
@@ -256,7 +454,7 @@ bool CloseAllSellPositions()
   }
 
 //+------------------------------------------------------------------+
-void MaintainSellStop()
+bool PlaceMatchingSell()
   {
    double buyVolume;
    double sellVolume;
@@ -265,48 +463,61 @@ void MaintainSellStop()
    ReadExposure(buyVolume, sellVolume, buyCount, sellCount);
    double uncoveredVolume = buyVolume - sellVolume;
    double minimumVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   if(uncoveredVolume < minimumVolume - 1e-9 || g_ema100 <= 0.0)
-     {
-      DeleteHedgeOrders();
-      return;
-     }
-
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   int stopsLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double belowEma = g_ema100 - InpSellStopOffsetPoints * point;
-   double maximumValidPrice = bid - stopsLevel * point;
-   double stopPrice = NormalizeDouble(MathMin(belowEma, maximumValidPrice),
-                                      _Digits);
-   if(stopPrice <= 0.0 || stopPrice >= bid)
-      return;
-
+   DeleteHedgeOrders();
+   if(uncoveredVolume < minimumVolume - 1e-9)
+      return sellVolume >= buyVolume - 1e-9;
    double requiredVolume = NormalizeVolume(uncoveredVolume);
-   double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   bool matching = false;
-   for(int index = OrdersTotal() - 1; index >= 0; index--)
+   if(!g_trade.Sell(requiredVolume, _Symbol, 0.0, 0.0, 0.0,
+                    HEDGE_COMMENT))
      {
-      ulong ticket = OrderGetTicket(index);
-      if(ticket <= 0 || OrderGetString(ORDER_SYMBOL) != _Symbol ||
-         (ulong)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber ||
-         OrderGetString(ORDER_COMMENT) != HEDGE_COMMENT)
-         continue;
-      bool same = MathAbs(OrderGetDouble(ORDER_PRICE_OPEN) - stopPrice) <
-                  point * 0.5 &&
-                  MathAbs(OrderGetDouble(ORDER_VOLUME_CURRENT) -
-                          requiredVolume) < volumeStep * 0.5;
-      if(!matching && same)
-         matching = true;
-      else if(!g_trade.OrderDelete(ticket))
-         Print("Unable to replace EMA100 SELL STOP #", ticket, ": ",
-               g_trade.ResultRetcodeDescription());
-     }
-   if(matching)
-      return;
-   if(!g_trade.SellStop(requiredVolume, stopPrice, _Symbol, 0.0, 0.0,
-                        ORDER_TIME_GTC, 0, HEDGE_COMMENT))
-      Print("EMA100 SELL STOP failed: ",
+      Print("Bearish EMA hedge SELL failed: ",
             g_trade.ResultRetcodeDescription());
+      return false;
+     }
+   Print("Bearish EMA hedge SELL opened for ",
+         DoubleToString(requiredVolume, 2), " lots");
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+void CloseSellsAfterBuyBasketClosed()
+  {
+   bool hasBuy = false;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket > 0 && PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+        {
+         hasBuy = true;
+         break;
+        }
+     }
+   if(hasBuy)
+     {
+      g_hadBuyPositions = true;
+      return;
+     }
+   if(!g_hadBuyPositions)
+      return;
+
+   bool sellsRemain = false;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol ||
+         PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL)
+         continue;
+      if(!g_trade.PositionClose(ticket, InpDeviationPoints))
+        {
+         sellsRemain = true;
+         Print("Unable to close SELL #", ticket,
+               " after BUY basket closed: ",
+               g_trade.ResultRetcodeDescription());
+        }
+     }
+   if(!sellsRemain)
+      g_hadBuyPositions = false;
   }
 
 //+------------------------------------------------------------------+
@@ -383,28 +594,50 @@ void CreateTradeButtons(const int y)
   }
 
 //+------------------------------------------------------------------+
+void DrawPositionSelectors(const int y)
+  {
+   ObjectsDeleteAll(0, POSITION_BUTTON_PREFIX);
+   int row = 0;
+   for(int index = PositionsTotal() - 1; index >= 0; index--)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket <= 0 || PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      bool selected = IsTicketSelected(ticket);
+      string side = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY
+                    ? "BUY " : "SELL";
+      string text = (selected ? "[X] " : "[ ] ") + side + " #" +
+                    IntegerToString((long)ticket) + "  " +
+                    DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) +
+                    " lots  P/L " +
+                    DoubleToString(PositionGetDouble(POSITION_PROFIT), 2);
+      string name = PositionButtonName(ticket);
+      CreateButton(name, text, InpPanelX, y + row * 28, 464,
+                   selected ? clrDarkGoldenrod : C'48,55,68');
+      ObjectSetInteger(0, name, OBJPROP_STATE, false);
+      row++;
+     }
+   CreateButton(BUTTON_CLOSE_SELECTED, "CLOSE SELECTED", InpPanelX,
+                y + row * 28, 464, clrFireBrick);
+  }
+
+//+------------------------------------------------------------------+
 void PlaceManualOrder(const bool buyOrder)
   {
-   if(buyOrder && g_atr <= 0.0)
-     {
-      Print("Manual BUY blocked: completed M5 ATR is not available");
-      return;
-     }
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double takeProfit = buyOrder
-                       ? NormalizeDouble(ask +
-                         InpTakeProfitAtrMultiplier * g_atr, _Digits)
-                       : 0.0;
    bool opened = buyOrder
                  ? g_trade.Buy(NormalizeVolume(InpLots), _Symbol,
-                               0.0, 0.0, takeProfit, "Manual button BUY")
+                               0.0, 0.0, 0.0, "Manual button BUY")
                  : g_trade.Sell(NormalizeVolume(InpLots), _Symbol,
                                 0.0, 0.0, 0.0, "Manual button SELL");
    if(!opened)
       Print("Manual ", buyOrder ? "BUY" : "SELL", " failed: ",
             g_trade.ResultRetcodeDescription());
    else
+     {
+      if(buyOrder)
+         g_buyArmed = false;
       Print("Manual ", buyOrder ? "BUY" : "SELL", " opened");
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -425,8 +658,39 @@ void ClosePositionsByType(const long positionType)
   }
 
 //+------------------------------------------------------------------+
+void CloseSelectedPositions()
+  {
+   ulong tickets[];
+   ArrayCopy(tickets, g_selectedTickets);
+   for(int index = 0; index < ArraySize(tickets); index++)
+     {
+      ulong ticket = tickets[index];
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if(!g_trade.PositionClose(ticket, InpDeviationPoints))
+         Print("Selected close failed for #", ticket, ": ",
+               g_trade.ResultRetcodeDescription());
+      else
+         Print("Closed selected position #", ticket);
+     }
+   ArrayResize(g_selectedTickets, 0);
+  }
+
+//+------------------------------------------------------------------+
 bool HandleTradeButton(const string name)
   {
+   if(StringFind(name, POSITION_BUTTON_PREFIX) == 0)
+     {
+      ulong ticket = (ulong)StringToInteger(
+         StringSubstr(name, StringLen(POSITION_BUTTON_PREFIX)));
+      if(ticket > 0 && PositionSelectByTicket(ticket) &&
+         PositionGetString(POSITION_SYMBOL) == _Symbol)
+         ToggleSelectedTicket(ticket);
+      DrawPanel(false);
+      return true;
+     }
    if(name == BUTTON_BUY)
       PlaceManualOrder(true);
    else if(name == BUTTON_SELL)
@@ -435,10 +699,13 @@ bool HandleTradeButton(const string name)
       ClosePositionsByType(POSITION_TYPE_BUY);
    else if(name == BUTTON_CLOSE_SELL)
       ClosePositionsByType(POSITION_TYPE_SELL);
+   else if(name == BUTTON_CLOSE_SELECTED)
+      CloseSelectedPositions();
    else
       return false;
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
-   MaintainSellStop();
+   DeleteHedgeOrders();
+   DrawPanel(false);
    ChartRedraw();
    return true;
   }
@@ -465,12 +732,13 @@ void DrawPanel(const bool buySignal)
    int x = InpPanelX;
    int y = InpPanelY;
    int lineHeight = InpFontSize + 8;
+   int positionCount = buyCount + sellCount;
    SetBackground(PREFIX + "bg", x - 8, y - 8, 500,
-                 lineHeight * 11 + 14);
+                 lineHeight * 12 + 28 * (positionCount + 1) + 14);
    int row = 0;
    SetLabel(PREFIX + "title", "BACKTEST OPEN ORDERS", x,
             y + lineHeight * row++, clrWhite, InpFontSize + 1);
-   SetLabel(PREFIX + "l1", "M5 close / ATR: " +
+   SetLabel(PREFIX + "l1", EnumToString(InpTimeframe) + " close / ATR: " +
             DoubleToString(g_lastClose, _Digits) + " / " +
             DoubleToString(g_atrLine, _Digits),
             x, y + lineHeight * row++, g_lastClose > g_atrLine
@@ -480,12 +748,11 @@ void DrawPanel(const bool buySignal)
             DoubleToString(g_ema50, _Digits) + " / " +
             DoubleToString(g_ema100, _Digits),
             x, y + lineHeight * row++, clrSilver);
-   SetLabel(PREFIX + "l3", "BUY signal:    " +
+   SetLabel(PREFIX + "l3", "BUY setup:     " +
             (buySignal ? "YES" : "NO"),
             x, y + lineHeight * row++, buySignal ? clrLimeGreen : clrOrange);
-   SetLabel(PREFIX + "l4", "Re-entry armed: " +
-            (g_buyArmed ? "YES" : "NO"),
-            x, y + lineHeight * row++, g_buyArmed ? clrAqua : clrSilver);
+   SetLabel(PREFIX + "l4", "Entry mode:    MANUAL BUTTONS ONLY",
+            x, y + lineHeight * row++, clrAqua);
    SetLabel(PREFIX + "l5", "BUY exposure:  " +
             IntegerToString(buyCount) + " / " +
             DoubleToString(buyVolume, 2) + " lots",
@@ -497,21 +764,26 @@ void DrawPanel(const bool buySignal)
    SetLabel(PREFIX + "l7", "Uncovered BUY: " +
             DoubleToString(MathMax(0.0, buyVolume - sellVolume), 2) + " lots",
             x, y + lineHeight * row++, clrAqua);
-   SetLabel(PREFIX + "l8", "SELL STOP:     below EMA100",
+   SetLabel(PREFIX + "l8", "Automatic entries: DISABLED",
             x, y + lineHeight * row++, clrSilver);
+   SetLabel(PREFIX + "l9", "Bullish OB: " + g_nearestBullishBlock,
+            x, y + lineHeight * row++, InpBullishOrderBlockColor);
+   SetLabel(PREFIX + "l10", "Bearish OB: " + g_nearestBearishBlock,
+            x, y + lineHeight * row++, InpBearishOrderBlockColor);
    CreateTradeButtons(y + lineHeight * row);
+   DrawPositionSelectors(y + lineHeight * (row + 1) + 8);
    ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
 void ProcessCompletedBar()
   {
-   datetime barTime = iTime(_Symbol, PERIOD_M5, 1);
+   datetime barTime = iTime(_Symbol, InpTimeframe, 1);
    if(barTime <= 0 || barTime <= g_lastProcessedBar)
       return;
    MqlRates bar[];
    ArraySetAsSeries(bar, true);
-   if(CopyRates(_Symbol, PERIOD_M5, 1, 1, bar) != 1 ||
+   if(CopyRates(_Symbol, InpTimeframe, 1, 1, bar) != 1 ||
       !ReadClosedValue(g_atrHandle, g_atr) ||
       !ReadClosedValue(g_ema21Handle, g_ema21) ||
       !ReadClosedValue(g_ema50Handle, g_ema50) ||
@@ -524,36 +796,12 @@ void ProcessCompletedBar()
    DrawEma(g_ema21Handle, "21", InpEma21Color);
    DrawEma(g_ema50Handle, "50", InpEma50Color);
    DrawEma(g_ema100Handle, "100", InpEma100Color);
+   DrawOrderBlocks();
 
-   if(g_lastClose < g_ema100)
-      g_buyArmed = true;
    bool buySignal = g_lastClose > g_atrLine &&
                     g_lastClose > g_ema21 &&
                     g_ema21 > g_ema50 &&
                     g_ema50 > g_ema100;
-   if(g_buyArmed && buySignal)
-     {
-      DeleteHedgeOrders();
-      if(!CloseAllSellPositions())
-         Print("BUY blocked because one or more SELL positions could not close");
-      else
-        {
-         double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double takeProfit = NormalizeDouble(
-            ask + InpTakeProfitAtrMultiplier * g_atr, _Digits);
-         if(g_trade.Buy(NormalizeVolume(InpLots), _Symbol, 0.0, 0.0,
-                        takeProfit, "M5 ATR EMA stack BUY"))
-           {
-            g_buyArmed = false;
-            Print("BUY opened; TP=", DoubleToString(takeProfit, _Digits),
-                  " (", DoubleToString(InpTakeProfitAtrMultiplier, 1),
-                  " ATR)");
-           }
-         else
-            Print("BUY failed: ", g_trade.ResultRetcodeDescription());
-        }
-     }
-   MaintainSellStop();
    DrawPanel(buySignal);
    RemoveIndicatorSubwindows();
    ChartRedraw();
@@ -573,15 +821,16 @@ int OnInit()
       Print("EMA100 SELL STOP hedging requires a hedging account.");
       return INIT_FAILED;
      }
-   if(InpAtrPeriod < 1 || InpAtrMultiplier <= 0.0 ||
-      InpTakeProfitAtrMultiplier <= 0.0 || InpLots <= 0.0 ||
-      InpSellStopOffsetPoints < 1)
+   if(InpAtrPeriod < 1 || InpAtrMultiplier <= 0.0 || InpLots <= 0.0 ||
+      InpOrderBlockLookback < 2 || InpOrderBlockSearch < 1 ||
+      InpOrderBlockDisplacementAtr <= 0.0 || InpOrderBlockHistory < 50 ||
+      InpOrderBlockMaxVisible < 1 || InpOrderBlockProjectionBars < 1)
       return INIT_PARAMETERS_INCORRECT;
 
-   g_atrHandle = iATR(_Symbol, PERIOD_M5, InpAtrPeriod);
-   g_ema21Handle = iMA(_Symbol, PERIOD_M5, 21, 0, MODE_EMA, PRICE_CLOSE);
-   g_ema50Handle = iMA(_Symbol, PERIOD_M5, 50, 0, MODE_EMA, PRICE_CLOSE);
-   g_ema100Handle = iMA(_Symbol, PERIOD_M5, 100, 0, MODE_EMA, PRICE_CLOSE);
+   g_atrHandle = iATR(_Symbol, InpTimeframe, InpAtrPeriod);
+   g_ema21Handle = iMA(_Symbol, InpTimeframe, 21, 0, MODE_EMA, PRICE_CLOSE);
+   g_ema50Handle = iMA(_Symbol, InpTimeframe, 50, 0, MODE_EMA, PRICE_CLOSE);
+   g_ema100Handle = iMA(_Symbol, InpTimeframe, 100, 0, MODE_EMA, PRICE_CLOSE);
    if(g_atrHandle == INVALID_HANDLE || g_ema21Handle == INVALID_HANDLE ||
       g_ema50Handle == INVALID_HANDLE || g_ema100Handle == INVALID_HANDLE)
      {
@@ -591,9 +840,13 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpDeviationPoints);
    g_trade.SetTypeFillingBySymbol(_Symbol);
-   CreateTradeButtons(InpPanelY + (InpFontSize + 8) * 9);
+   double initialBuyVolume, initialSellVolume;
+   int initialBuyCount, initialSellCount;
+   ReadExposure(initialBuyVolume, initialSellVolume,
+                initialBuyCount, initialSellCount);
+   g_hadBuyPositions = initialBuyCount > 0;
+   CreateTradeButtons(InpPanelY + (InpFontSize + 8) * 11);
    ProcessCompletedBar();
-   MaintainSellStop();
    RemoveIndicatorSubwindows();
    return INIT_SUCCEEDED;
   }
@@ -617,9 +870,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   ProcessPressedTradeButtons();
+   CloseSellsAfterBuyBasketClosed();
    ProcessCompletedBar();
-   MaintainSellStop();
+   CloseSellsAfterBuyBasketClosed();
    RemoveIndicatorSubwindows();
   }
 

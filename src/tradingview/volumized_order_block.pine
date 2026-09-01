@@ -1,0 +1,202 @@
+// This derivative work is licensed under CC BY-NC-SA 4.0.
+// Original "Volume Orderbook" concept and Pine Script © Zeiierman.
+// MT5 strategy conversion and signal adaptation.
+// https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+//@version=6
+indicator("Volumized Order Block Signals (MT5 Conversion)", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500,
+     max_bars_back = 5000)
+
+// Profile inputs
+src = input.source(close, "Source")
+rows = input.int(10, "Rows", minval = 1, maxval = 50)
+widthMultiplier = input.float(0.5, "Bin Width", minval = 0.1,
+     maxval = 10.0, step = 0.05)
+historyBars = input.int(2000, "History Bars", minval = 2, maxval = 5000)
+leftBars = input.int(5, "Profile Offset", minval = 0, maxval = 50)
+showPoc = input.bool(false, "Show POC")
+showGrid = input.bool(false, "Show Grid")
+showBorder = input.bool(false, "Show Profile Border")
+
+// Signal inputs match the MT5 EA defaults.
+buyThreshold = input.float(0.45, "BUY Ratio Threshold", step = 0.01)
+sellThreshold = input.float(-1.0, "SELL Ratio Threshold", step = 0.01)
+showSignals = input.bool(true, "Show Signal Markers")
+showEmas = input.bool(true, "Show EMA 50 / EMA 100")
+
+sellColor = input.color(color.rgb(205, 55, 75), "Red Above")
+buyColor = input.color(color.rgb(0, 150, 85), "Green Below")
+currentColor = input.color(color.gray, "Current Row")
+gridColor = input.color(color.new(color.gray, 55), "Grid")
+
+var box[] drawnBoxes = array.new_box()
+var line[] drawnLines = array.new_line()
+var label[] drawnLabels = array.new_label()
+
+clearDrawings() =>
+    if array.size(drawnBoxes) > 0
+        for index = array.size(drawnBoxes) - 1 to 0
+            box.delete(array.get(drawnBoxes, index))
+    if array.size(drawnLines) > 0
+        for index = array.size(drawnLines) - 1 to 0
+            line.delete(array.get(drawnLines, index))
+    if array.size(drawnLabels) > 0
+        for index = array.size(drawnLabels) - 1 to 0
+            label.delete(array.get(drawnLabels, index))
+    array.clear(drawnBoxes)
+    array.clear(drawnLines)
+    array.clear(drawnLabels)
+
+volumeRank(float[] values, int target) =>
+    int rank = 0
+    float targetValue = array.get(values, target)
+    for index = 0 to array.size(values) - 1
+        if array.get(values, index) < targetValue
+            rank += 1
+    rank
+
+float redTotal = na
+float greenTotal = na
+float tradeRatio = na
+bool buySignal = false
+bool sellSignal = false
+
+// The EA recalculates its profile at the newest selected-timeframe bar.
+// This Pine version performs the same rolling calculation on the chart timeframe.
+if barstate.islast
+    clearDrawings()
+
+    int barsUsed = math.min(historyBars, bar_index + 1)
+    int oldestOffset = barsUsed - 1
+    float step = (high[oldestOffset] - low[oldestOffset]) * widthMultiplier
+    if step <= 0
+        for offset = oldestOffset - 1 to 0
+            if step <= 0
+                step := (high[offset] - low[offset]) * widthMultiplier
+    step := step > 0 ? step : syminfo.mintick
+
+    float minimumSource = 1e20
+    float maximumSource = -1e20
+    for offset = 0 to oldestOffset
+        float value = src[offset]
+        minimumSource := math.min(minimumSource, value)
+        maximumSource := math.max(maximumSource, value)
+
+    float initialSource = src[oldestOffset]
+    float topLevel = initialSource + step
+    int expansionGuard = 0
+    while maximumSource >= topLevel and expansionGuard < 20000
+        topLevel += step
+        expansionGuard += 1
+
+    int binCount = int(math.ceil((topLevel - minimumSource) / step)) + 1
+    if binCount > 0 and binCount <= 20000
+        float[] profile = array.new_float(binCount, 0.0)
+        for offset = 0 to oldestOffset
+            int bin = int(math.floor((topLevel - src[offset]) / step))
+            bin := math.max(0, math.min(binCount - 1, bin))
+            array.set(profile, bin, array.get(profile, bin) + nz(volume[offset]))
+
+        int currentBin = int(math.floor((topLevel - src) / step))
+        currentBin := math.max(0, math.min(binCount - 1, currentBin))
+        int rowCount = rows * 2 + 1
+        float[] visibleVolumes = array.new_float(rowCount, 0.0)
+        int[] visibleBins = array.new_int(rowCount, -1)
+        redTotal := 0.0
+        greenTotal := 0.0
+
+        for row = 0 to rowCount - 1
+            int bin = currentBin - rows + row
+            float rowVolume = bin >= 0 and bin < binCount ? array.get(profile, bin) : 0.0
+            array.set(visibleBins, row, bin)
+            array.set(visibleVolumes, row, rowVolume)
+            if row < rows
+                redTotal += rowVolume
+            else if row > rows
+                greenTotal += rowVolume
+
+        tradeRatio := greenTotal > 0 ? (greenTotal - redTotal) / greenTotal : na
+        buySignal := not na(tradeRatio) and tradeRatio > buyThreshold
+        sellSignal := not na(tradeRatio) and tradeRatio <= sellThreshold
+
+        int maximumRank = 0
+        for row = 0 to rowCount - 1
+            maximumRank := math.max(maximumRank, volumeRank(visibleVolumes, row))
+
+        float profileTop = na
+        float profileBottom = na
+        for row = 0 to rowCount - 1
+            int bin = array.get(visibleBins, row)
+            if bin >= 0 and bin < binCount
+                int rank = volumeRank(visibleVolumes, row)
+                float priceTop = topLevel - bin * step
+                float priceBottom = priceTop - step
+                color baseColor = row < rows ? sellColor : row > rows ? buyColor : currentColor
+                color rowColor = color.from_gradient(rank, 0,
+                     math.max(1, maximumRank), color.new(baseColor, 80),
+                     color.new(baseColor, 40))
+                int left = bar_index + leftBars + rows * 2 - rank
+                int right = bar_index + leftBars + rows * 2 + math.max(1, rank)
+                box profileBox = box.new(left, priceTop, right, priceBottom,
+                     border_color = rowColor, border_style = line.style_dotted,
+                     bgcolor = rowColor, text = str.tostring(array.get(visibleVolumes, row), format.volume),
+                     text_color = chart.fg_color)
+                array.push(drawnBoxes, profileBox)
+
+                if showGrid
+                    line gridLine = line.new(bar_index + leftBars, priceTop,
+                         math.min(bar_index + leftBars + rows * 2 + rowCount, bar_index + 500),
+                         priceTop, color = gridColor, style = line.style_dotted)
+                    array.push(drawnLines, gridLine)
+
+                if showPoc and rank == maximumRank
+                    line pocLine = line.new(bar_index - oldestOffset,
+                         (priceTop + priceBottom) * 0.5, right,
+                         (priceTop + priceBottom) * 0.5,
+                         color = baseColor, width = 2, extend = extend.left)
+                    array.push(drawnLines, pocLine)
+
+                profileTop := na(profileTop) ? priceTop : math.max(profileTop, priceTop)
+                profileBottom := na(profileBottom) ? priceBottom : math.min(profileBottom, priceBottom)
+
+        if showBorder and not na(profileTop) and not na(profileBottom)
+            box border = box.new(bar_index + leftBars, profileTop,
+                 math.min(bar_index + leftBars + rows * 2 + rowCount, bar_index + 500),
+                 profileBottom, border_color = gridColor, border_width = 2,
+                 bgcolor = color.new(color.black, 100))
+            array.push(drawnBoxes, border)
+
+plot(showEmas ? ta.ema(close, 50) : na, "EMA 50", color = color.blue)
+plot(showEmas ? ta.ema(close, 100) : na, "EMA 100", color = color.fuchsia, linewidth = 2)
+
+plotshape(showSignals and buySignal, title = "BUY signal", style = shape.labelup,
+     location = location.belowbar, color = color.lime, text = "BUY",
+     textcolor = color.black, size = size.tiny)
+plotshape(showSignals and sellSignal, title = "SELL signal", style = shape.labeldown,
+     location = location.abovebar, color = color.red, text = "SELL",
+     textcolor = color.white, size = size.tiny)
+
+alertcondition(buySignal, "Volumized Orderbook BUY",
+     "BUY: trade ratio is above the configured BUY threshold")
+alertcondition(sellSignal, "Volumized Orderbook SELL",
+     "SELL: trade ratio is at or below the configured SELL threshold")
+
+var table statusTable = table.new(position.top_left, 2, 6,
+     bgcolor = color.rgb(20, 24, 32), frame_color = color.rgb(75, 85, 105),
+     frame_width = 1)
+if barstate.islast
+    table.cell(statusTable, 0, 0, "VOLUME ORDERBOOK", text_color = color.white)
+    table.cell(statusTable, 1, 0, timeframe.period, text_color = color.silver)
+    table.cell(statusTable, 0, 1, "RED ABOVE", text_color = sellColor)
+    table.cell(statusTable, 1, 1, na(redTotal) ? "N/A" : str.tostring(redTotal, format.volume), text_color = sellColor)
+    table.cell(statusTable, 0, 2, "GREEN BELOW", text_color = buyColor)
+    table.cell(statusTable, 1, 2, na(greenTotal) ? "N/A" : str.tostring(greenTotal, format.volume), text_color = buyColor)
+    table.cell(statusTable, 0, 3, "TRADE RATIO", text_color = chart.fg_color)
+    table.cell(statusTable, 1, 3, na(tradeRatio) ? "N/A" : str.tostring(tradeRatio, "#.####"),
+         text_color = buySignal ? buyColor : sellSignal ? sellColor : chart.fg_color)
+    table.cell(statusTable, 0, 4, "BUY > " + str.tostring(buyThreshold), text_color = buyColor)
+    table.cell(statusTable, 1, 4, buySignal ? "YES" : "NO", text_color = buySignal ? buyColor : color.silver)
+    table.cell(statusTable, 0, 5, "SELL <= " + str.tostring(sellThreshold), text_color = sellColor)
+    table.cell(statusTable, 1, 5, sellSignal ? "YES" : "NO", text_color = sellSignal ? sellColor : color.silver)
+
